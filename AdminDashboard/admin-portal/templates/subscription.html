@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+
+{% block title %}Subscription{% endblock %}
+
+{% block content %}
+<section class="panel">
+  <header class="page-header">
+    <h2>Subscription</h2>
+  </header>
+
+  {% if not billing_configured %}
+  <p class="muted">
+    Billing information is not configured for this instance.
+    Contact <a href="mailto:support@redoubt.systems">support@redoubt.systems</a> for help.
+  </p>
+
+  {% elif not sub %}
+  <p class="muted">
+    Unable to load subscription details. Please try again or contact
+    <a href="mailto:support@redoubt.systems">support@redoubt.systems</a>.
+  </p>
+
+  {% else %}
+
+  <div class="sub-grid">
+
+    <div class="sub-card">
+      <div class="sub-card-label">Plan</div>
+      <div class="sub-card-value">{{ plan_display }}</div>
+      <div class="sub-card-meta">
+        {% if sub.billing_cycle == "annual" %}Annual billing{% else %}Monthly billing{% endif %}
+      </div>
+    </div>
+
+    <div class="sub-card">
+      <div class="sub-card-label">Status</div>
+      <div class="sub-card-value">
+        <span class="status-badge status-{{ sub.subscription_status }}">
+          {{ sub.subscription_status | capitalize }}
+        </span>
+      </div>
+    </div>
+
+    {% if period_end_display %}
+    <div class="sub-card">
+      <div class="sub-card-label">Next billing date</div>
+      <div class="sub-card-value">{{ period_end_display }}</div>
+    </div>
+    {% endif %}
+
+    <div class="sub-card">
+      <div class="sub-card-label">User limit</div>
+      <div class="sub-card-value">{{ max_users if max_users else "Unlimited" }}</div>
+    </div>
+
+  </div>
+
+  {% set active_addons = [] %}
+  {% if sub.has_custom_domain %}
+    {% set _ = active_addons.append("Custom Domain") %}
+  {% endif %}
+  {% if sub.has_video %}
+    {% set _ = active_addons.append("Video Conferencing") %}
+  {% endif %}
+  {% if sub.extra_storage_gb %}
+    {% set _ = active_addons.append("Additional Storage (" ~ sub.extra_storage_gb ~ " GB)") %}
+  {% endif %}
+
+  <h3 class="section-heading">Add-ons</h3>
+  {% if active_addons %}
+  <ul class="addon-list">
+    {% for addon in active_addons %}
+    <li class="addon-item">{{ addon }}</li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">No add-ons active.</p>
+  {% endif %}
+
+  {% if sub.has_custom_domain %}
+  <h3 class="section-heading">Custom Domain</h3>
+  <table class="detail-table" style="max-width:520px;">
+    <tr>
+      <th>Domain</th>
+      <td>{{ sub.custom_domain }}</td>
+    </tr>
+    <tr>
+      <th>DNS status</th>
+      <td>
+        {% if sub.domain_verified %}
+          <span class="status active">Verified</span>
+        {% else %}
+          <span class="status deactivated">Pending verification</span>
+        {% endif %}
+      </td>
+    </tr>
+  </table>
+  {% endif %}
+
+  <h3 class="section-heading">Manage</h3>
+  <p class="muted" style="margin-bottom:1rem;">
+    Change your plan, add or remove add-ons, update payment details, or cancel
+    through the Stripe billing portal.
+  </p>
+  <form method="post" action="{{ url_for('subscription_portal') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="btn primary">Open Billing Portal</button>
+  </form>
+
+  {% endif %}
+</section>
+{% endblock %}

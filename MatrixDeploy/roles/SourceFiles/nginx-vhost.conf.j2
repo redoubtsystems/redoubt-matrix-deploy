@@ -1,0 +1,99 @@
+server {
+  listen 80;
+  server_name {{ _vhost_domain }};
+
+  location /.well-known/acme-challenge/ {
+    root /var/www/html;
+  }
+
+  location / {
+{% if item.network_addon | default('') == 'wireguard' %}
+    allow 10.100.{{ item.wireguard_port - 51800 }}.0/24;
+    deny all;
+{% endif %}
+    return 301 https://$host$request_uri;
+  }
+}
+
+{% if _tls_cert_exists | default(false) %}
+server {
+  listen 443 ssl http2;
+  server_name {{ _vhost_domain }};
+  root /srv/matrix/{{ item.id }}_chat/client;
+  index index.html;
+
+  ssl_certificate /etc/letsencrypt/live/{{ _vhost_domain }}/fullchain.pem;
+  ssl_certificate_key /etc/letsencrypt/live/{{ _vhost_domain }}/privkey.pem;
+  ssl_protocols TLSv1.2 TLSv1.3;
+  ssl_prefer_server_ciphers on;
+
+  add_header X-Content-Type-Options nosniff;
+  add_header X-Frame-Options SAMEORIGIN;
+  add_header X-XSS-Protection "1; mode=block";
+
+{% if item.network_addon | default('') == 'wireguard' %}
+  # Restrict access to WireGuard subnet only
+  allow 10.100.{{ item.wireguard_port - 51800 }}.0/24;
+  deny all;
+{% endif %}
+
+  location / {
+    try_files $uri $uri/ /index.html;
+  }
+
+  location /.well-known/matrix/client {
+    default_type application/json;
+    add_header Access-Control-Allow-Origin *;
+{% if 'teleconferencing' in (item.addons | default([])) %}
+    return 200 '{"m.homeserver":{"base_url":"https://{{ _vhost_domain }}"},"org.matrix.msc4143.rtc_foci":[{"type":"livekit","livekit_service_url":"https://{{ _vhost_domain }}/livekit/jwt"}]}';
+{% else %}
+    return 200 '{"m.homeserver":{"base_url":"https://{{ _vhost_domain }}"}}';
+{% endif %}
+  }
+
+  location /.well-known/matrix/server {
+    add_header Content-Type application/json;
+    return 200 '{"m.server": "{{ _vhost_domain }}:443"}';
+  }
+
+  location /_matrix/ {
+    proxy_pass http://127.0.0.1:{{ item.matrix_port }};
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  }
+  location /_synapse/ {
+    proxy_pass http://127.0.0.1:{{ item.matrix_port }};
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  }
+
+{% if 'teleconferencing' in (item.addons | default([])) %}
+  # LiveKit JWT service — validates Matrix OpenID tokens and issues LiveKit JWTs
+  location /livekit/jwt/ {
+    proxy_pass http://127.0.0.1:{{ item.livekit_jwt_port }}/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+
+  # LiveKit SFU WebSocket — clients connect here for call signaling
+  location /livekit/sfu/ {
+    proxy_pass http://127.0.0.1:{{ item.livekit_api_port }}/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_buffering off;
+    proxy_read_timeout 900s;
+  }
+{% endif %}
+}
+{% endif %}

@@ -1,0 +1,1073 @@
+# ── Nginx default catch-all ─────────────────────────────────────────────────
+# Ensures requests for non-existent tenant subdomains get dropped (444) instead
+# of falling through to whichever tenant's server block Nginx loads first.
+# Idempotent — safe to run on every provision.
+
+- name: Generate self-signed default cert (if absent)
+  command: >
+    openssl req -x509 -nodes -days 3650 -newkey rsa:2048
+    -keyout /etc/nginx/self-signed-default.key
+    -out /etc/nginx/self-signed-default.crt
+    -subj "/CN=_"
+  args:
+    creates: /etc/nginx/self-signed-default.crt
+
+- name: Deploy Nginx default catch-all vhost
+  copy:
+    src: ../../SourceFiles/nginx-default-catchall.conf
+    dest: /etc/nginx/sites-available/000-default-catchall.conf
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Enable Nginx default catch-all vhost
+  file:
+    src: /etc/nginx/sites-available/000-default-catchall.conf
+    dest: /etc/nginx/sites-enabled/000-default-catchall.conf
+    state: link
+
+- name: Remove Ubuntu default Nginx vhost (conflicts with catch-all default_server)
+  file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+
+# ── Tenant provisioning ───────────────────────────────────────────────────
+
+- name: Create ReadOnly Synapse Directories for {{ item.id }}
+  file:
+    path: /srv/matrix/{{ item.id }}_chat/{{ dir }}
+    state: directory
+    owner: "{{ admin_user }}"
+    group: "www-data"
+    mode: '0755'
+  loop:
+    - config
+    - logs
+  loop_control:
+    loop_var: dir
+
+- name: Open Instance Specific ports
+  ufw:
+    rule: allow
+    port: "{{ port }}"
+    proto: tcp
+  with_items:
+    - '{{ item.admin_port }}'
+  loop_control:
+    loop_var: port
+
+# ── Storage enforcement via loop device ────────────────────────────────────────
+# Each tenant gets a fixed-size ext4 image file mounted at the data directory.
+# Total storage = plan base (max_storage_mb) + extra_storage_gb from BillingService.
+# The image is sparse (only allocates blocks on write) so initial creation is instant.
+
+- name: Compute total storage for {{ item.id }}
+  set_fact:
+    total_storage_mb: "{{ (plans[item.plan_type].max_storage_mb | int) + ((item.extra_storage_gb | default(0) | int) * 1024) }}"
+
+- name: Check if data image exists for {{ item.id }}
+  stat:
+    path: "/srv/matrix/{{ item.id }}_chat/{{ item.id }}_data.img"
+  register: data_img_stat
+
+# ── New image (first provision) ──────────────────────────────────────────────
+
+- name: Create sparse data image for {{ item.id }}
+  command: truncate -s {{ total_storage_mb }}M /srv/matrix/{{ item.id }}_chat/{{ item.id }}_data.img
+  when: not data_img_stat.stat.exists
+
+- name: Format data image as ext4 for {{ item.id }}
+  command: mkfs.ext4 -F /srv/matrix/{{ item.id }}_chat/{{ item.id }}_data.img
+  when: not data_img_stat.stat.exists
+
+- name: Mount data image for {{ item.id }}
+  mount:
+    path: "/srv/matrix/{{ item.id }}_chat/data"
+    src: "/srv/matrix/{{ item.id }}_chat/{{ item.id }}_data.img"
+    fstype: ext4
+    opts: loop
+    state: mounted
+
+# ── Resize handling (re-provision) ───────────────────────────────────────────
+
+- name: Get current image size for {{ item.id }}
+  set_fact:
+    current_img_mb: "{{ (data_img_stat.stat.size | default(0) | int / 1048576) | int }}"
+  when: data_img_stat.stat.exists
+
+- name: Check disk usage on data mount for {{ item.id }}
+  shell: "df --output=used -BM '/srv/matrix/{{ item.id }}_chat/data' | tail -1 | tr -dc '0-9'"
+  register: storage_used_raw
+  changed_when: false
+  when: data_img_stat.stat.exists
+
+- name: Set storage usage fact for {{ item.id }}
+  set_fact:
+    storage_used_mb: "{{ storage_used_raw.stdout | default('0') | int }}"
+  when: data_img_stat.stat.exists
+
+# -- Upgrade: grow image and expand filesystem (online, no downtime) --
+
+- name: Grow data image for {{ item.id }}
+  command: truncate -s {{ total_storage_mb }}M /srv/matrix/{{ item.id }}_chat/{{ item.id }}_data.img
+  when:
+    - data_img_stat.stat.exists
+    - (current_img_mb | int) < (total_storage_mb | int)
+
+- name: Expand loop device to match grown image for {{ item.id }}
+  shell: "losetup -c $(losetup -j '/srv/matrix/{{ item.id }}_chat/{{ item.id }}_data.img' | cut -d: -f1)"
+  when:
+    - data_img_stat.stat.exists
+    - (current_img_mb | int) < (total_storage_mb | int)
+
+- name: Expand ext4 filesystem for {{ item.id }}
+  command: resize2fs /srv/matrix/{{ item.id }}_chat/{{ item.id }}_data.img
+  when:
+    - data_img_stat.stat.exists
+    - (current_img_mb | int) < (total_storage_mb | int)
+
+# -- Downgrade: shrink if usage permits, otherwise flag over-quota --
+
+- name: Check if downgrade is possible for {{ item.id }}
+  set_fact:
+    storage_shrink_blocked: "{{ (storage_used_mb | int) > (total_storage_mb | int) }}"
+  when:
+    - data_img_stat.stat.exists
+    - (current_img_mb | int) > (total_storage_mb | int)
+
+- name: Stop Synapse for filesystem shrink on {{ item.id }}
+  command: docker stop {{ item.id }}_synapse
+  when:
+    - data_img_stat.stat.exists
+    - (current_img_mb | int) > (total_storage_mb | int)
+    - not (storage_shrink_blocked | default(false) | bool)
+  ignore_errors: true
+
+- name: Unmount data image for shrink on {{ item.id }}
+  mount:
+    path: "/srv/matrix/{{ item.id }}_chat/data"
+    state: unmounted
+  when:
+    - data_img_stat.stat.exists
+    - (current_img_mb | int) > (total_storage_mb | int)
+    - not (storage_shrink_blocked | default(false) | bool)
+
+- name: Check and repair filesystem before shrink on {{ item.id }}
+  command: e2fsck -f -y /srv/matrix/{{ item.id }}_chat/{{ item.id }}_data.img
+  when:
+    - data_img_stat.stat.exists
+    - (current_img_mb | int) > (total_storage_mb | int)
+    - not (storage_shrink_blocked | default(false) | bool)
+
+- name: Shrink ext4 filesystem for {{ item.id }}
+  command: resize2fs /srv/matrix/{{ item.id }}_chat/{{ item.id }}_data.img {{ total_storage_mb }}M
+  when:
+    - data_img_stat.stat.exists
+    - (current_img_mb | int) > (total_storage_mb | int)
+    - not (storage_shrink_blocked | default(false) | bool)
+
+- name: Shrink data image file for {{ item.id }}
+  command: truncate -s {{ total_storage_mb }}M /srv/matrix/{{ item.id }}_chat/{{ item.id }}_data.img
+  when:
+    - data_img_stat.stat.exists
+    - (current_img_mb | int) > (total_storage_mb | int)
+    - not (storage_shrink_blocked | default(false) | bool)
+
+- name: Remount data image after shrink for {{ item.id }}
+  mount:
+    path: "/srv/matrix/{{ item.id }}_chat/data"
+    src: "/srv/matrix/{{ item.id }}_chat/{{ item.id }}_data.img"
+    fstype: ext4
+    opts: loop
+    state: mounted
+  when:
+    - data_img_stat.stat.exists
+    - (current_img_mb | int) > (total_storage_mb | int)
+    - not (storage_shrink_blocked | default(false) | bool)
+
+- name: Warn storage over-quota for {{ item.id }}
+  debug:
+    msg: >-
+      WARNING: Tenant {{ item.id }} storage downgrade blocked.
+      Requested {{ total_storage_mb }}MB but {{ storage_used_mb }}MB in use.
+      Customer must reduce usage before downgrade takes effect.
+  when:
+    - storage_shrink_blocked | default(false) | bool
+
+# ── End storage enforcement ──────────────────────────────────────────────────
+
+- name: Create Writable Synapse Directories for {{ item.id }}
+  file:
+    path: /srv/matrix/{{ item.id }}_chat/{{ dir }}
+    state: directory
+    owner: 991
+    group: 991
+    mode: '0700'
+    recurse: true
+  loop:
+    - data
+  loop_control:
+    loop_var: dir
+
+- name: Create Postgres data directory for {{ item.id }}
+  file:
+    path: /srv/matrix/{{ item.id }}_chat/postgres
+    state: directory
+    # postgres:16-alpine's internal "postgres" user is uid/gid 70 (Alpine's
+    # postgresql package convention) — NOT 999, which is the Debian-based
+    # postgres image's uid. Getting this wrong doesn't fail the first
+    # provision (the official entrypoint self-corrects ownership via chown
+    # while initdb runs as root on an empty $PGDATA), but it silently
+    # breaks every later restart/reprovision, since the entrypoint skips
+    # that fixup once the data directory is already initialized.
+    owner: 70
+    group: 70
+    mode: '0700'
+
+- name: Create Client Directories for {{ item.id }}
+  file:
+    path: /srv/matrix/{{ item.id }}_chat/{{ dir }}
+    state: directory
+    owner: "{{ admin_user }}"
+    group: www-data
+    mode: '0755'
+  loop:
+    - client
+    - admin-portal
+  loop_control:
+    loop_var: dir
+
+- name: Create AdminPortal Directories for {{ item.id }}
+  file:
+    path: /srv/matrix/{{ item.id }}_chat/admin-portal/{{ dir }}
+    state: directory
+    owner: "{{ admin_user }}"
+    group: www-data
+    mode: '0755'
+  loop:
+    - scss
+    - static
+    - templates
+  loop_control:
+    loop_var: dir
+
+- name: Create AdminPortal Directories for {{ item.id }}
+  file:
+    path: /srv/matrix/{{ item.id }}_chat/admin-portal/static/{{ dir }}
+    state: directory
+    owner: "{{ admin_user }}"
+    group: www-data
+    mode: '0755'
+  loop:
+    - css
+    - img
+  loop_control:
+    loop_var: dir
+
+# ── Postgres credential ───────────────────────────────────────────────────────
+
+- name: Generate Postgres password for {{ item.id }}
+  shell: "openssl rand -hex 32 > '/srv/matrix/{{ item.id }}_chat/config/db.password'"
+  args:
+    creates: "/srv/matrix/{{ item.id }}_chat/config/db.password"
+
+- name: Set permissions on Postgres password for {{ item.id }}
+  file:
+    path: "/srv/matrix/{{ item.id }}_chat/config/db.password"
+    owner: root
+    group: root
+    mode: '0600'
+
+- name: Read Postgres password for {{ item.id }}
+  slurp:
+    src: "/srv/matrix/{{ item.id }}_chat/config/db.password"
+  register: db_password_slurp
+  no_log: true
+
+- name: Set Postgres password fact for {{ item.id }}
+  set_fact:
+    synapse_db_password: "{{ db_password_slurp.content | b64decode | trim }}"
+  no_log: true
+
+# ── End Postgres credential ───────────────────────────────────────────────────
+
+- name: Deploy Docker docker-compose-plugin
+  template:
+    src: ../../SourceFiles/compose.yml
+    dest: "/srv/matrix/{{ item.id }}_chat/compose.yaml"
+    owner: "{{ admin_user }}"
+    group: "{{ admin_user }}"
+    mode: '0644'
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+- name: Check Homeserver.yaml for {{ item.id }}
+  stat:
+    path: "/srv/matrix/{{ item.id }}_chat/data/homeserver.yaml"
+  register: homeserver_file
+
+- name: Deploy homeserver.yaml for {{ item.id }}
+  template:
+    src: ../../SourceFiles/homeserver.yaml
+    dest: "/srv/matrix/{{ item.id}}_chat/data/homeserver.yaml"
+    owner: "{{ admin_user }}"
+    group: "{{ admin_user }}"
+    mode: '0644'
+  register: homeserver_yaml_deploy
+
+- name: Deploy log.config for {{ item.id }}
+  template:
+    src: ../../SourceFiles/log.config.yml
+    dest: "/srv/matrix/{{ item.id }}_chat/config/log.config"
+    owner: "{{ admin_user }}"
+    group: "{{ admin_user }}"
+    mode: '0644'
+
+- name: Create client directory for {{ item.id }}
+  file:
+    path: "/srv/matrix/{{ item.id }}_chat/client"
+    state: directory
+    owner: "{{ admin_user }}"
+    group: www-data
+    mode: '0755'
+
+- name: Deploy pre-built client files for {{ item.id }}
+  synchronize:
+    src: "{{ ClientBuildPath }}"
+    dest: /srv/matrix/{{ item.id }}_chat/client/
+    recursive: true
+    rsync_opts:
+      - "--chown={{ admin_user }}:www-data"
+      - "--chmod=F644,D755"
+  become: false
+
+- name: Deploy branding assets for {{ item.id }}
+  copy:
+    src: ../../SourceFiles/ElementBranding/
+    dest: "/srv/matrix/{{ item.id }}_chat/client/themes/redoubt/"
+    owner: "{{ admin_user }}"
+    group: www-data
+    mode: '0644'
+    directory_mode: '0755'
+
+- name: Deploy Redoubt favicon for {{ item.id }}
+  copy:
+    src: ../../SourceFiles/ElementBranding/favicon.ico
+    dest: "/srv/matrix/{{ item.id }}_chat/client/favicon.ico"
+    owner: "{{ admin_user }}"
+    group: www-data
+    mode: '0644'
+
+- name: Deploy nginx dockerfile for {{ item.id }}
+  template:
+    src: ../../SourceFiles/Dockerfile_nginx
+    dest: "/srv/matrix/{{ item.id }}_chat/client/Dockerfile"
+    owner: "{{ admin_user }}"
+    group: "{{ admin_user }}"
+    mode: '0644'
+
+- name: Generate Flask secret key for {{ item.id }}
+  shell: "openssl rand -hex 32 > '/srv/matrix/{{ item.id }}_chat/admin-portal/.flask_secret'"
+  args:
+    creates: "/srv/matrix/{{ item.id }}_chat/admin-portal/.flask_secret"
+
+- name: Set permissions on Flask secret for {{ item.id }}
+  file:
+    path: "/srv/matrix/{{ item.id }}_chat/admin-portal/.flask_secret"
+    owner: "{{ admin_user }}"
+    mode: '0600'
+
+- name: Read Flask secret key for {{ item.id }}
+  slurp:
+    src: "/srv/matrix/{{ item.id }}_chat/admin-portal/.flask_secret"
+  register: flask_secret_slurp
+  no_log: true
+
+- name: Set Flask secret fact for {{ item.id }}
+  set_fact:
+    flask_secret_key: "{{ flask_secret_slurp.content | b64decode | trim }}"
+  no_log: true
+
+- name: Deploy Admin-Portal Base Directory Contents
+  template:
+    src: "../../SourceFiles/AdminPortal/{{ file }}"
+    dest: "/srv/matrix/{{ item.id }}_chat/admin-portal/{{ file }}"
+    owner: "{{ admin_user }}"
+    group: "{{ admin_user }}"
+    mode: '0644'
+  loop:
+    - app.py
+    - requirements.txt
+    - .env
+    - Dockerfile
+    - redoubt_login_email.html
+  loop_control:
+    loop_var: file
+
+- name: Deploy Admin-Portal scss
+  template:
+    src: "../../SourceFiles/AdminPortal/scss/admin.scss"
+    dest: "/srv/matrix/{{ item.id }}_chat/admin-portal/scss"
+    owner: "{{ admin_user }}"
+    group: "{{ admin_user }}"
+    mode: '0644'
+
+- name: Deploy Admin-Portal IMG Contents
+  copy:
+    src: "../../SourceFiles/AdminPortal/static/img/{{ file }}"
+    dest: "/srv/matrix/{{ item.id }}_chat/admin-portal/static/img/{{ file }}"
+    owner: "{{ admin_user }}"
+    group: "{{ admin_user }}"
+    mode: '0644'
+  loop:
+    - redoubt-logo.png
+    - vault-bg.png
+  loop_control:
+    loop_var: file
+
+- name: Deploy Admin-Portal Templates Contents
+  copy:
+    src: "../../SourceFiles/AdminPortal/templates/{{ file }}"
+    dest: "/srv/matrix/{{ item.id }}_chat/admin-portal/templates/{{ file }}"
+    owner: "{{ admin_user }}"
+    group: "{{ admin_user }}"
+    mode: '0644'
+  loop:
+    - base.html
+    - error.html
+    - login.html
+    - roomCreate.html
+    - roomDetail.html
+    - rooms.html
+    - server.html
+    - subscription.html
+    - userCreate.html
+    - userDetail.html
+    - users.html
+  loop_control:
+    loop_var: file
+
+# ── TLS certificates & vhosts ─────────────────────────────────────────────────
+# Two-domain flow for custom domain support:
+#
+# _has_custom_domain is true when default_subdomain is set and differs from
+# fulldomain (meaning fulldomain is a custom domain like chat.example.com).
+#
+# Phase 1 — Default subdomain (always succeeds):
+#   Deploy vhost, obtain cert, re-deploy with TLS.  This gives the tenant a
+#   working service immediately, even before the custom domain's DNS resolves.
+#
+# Phase 2 — Custom domain (may fail if DNS not ready):
+#   Attempt certbot for fulldomain.  If cert is obtained, deploy full vhost.
+#   Replace the default subdomain vhost with a 301 redirect.
+#
+# When there is no custom domain, _has_custom_domain is false and fulldomain
+# IS the default subdomain — Phase 1 alone handles everything.
+
+- name: Set custom domain flag for {{ item.id }}
+  set_fact:
+    _has_custom_domain: "{{ (item.default_subdomain | default('') | length > 0) and (item.default_subdomain != item.fulldomain) }}"
+
+- name: Set serving domain for {{ item.id }}
+  set_fact:
+    _default_domain: "{{ item.default_subdomain if (_has_custom_domain | bool) else item.fulldomain }}"
+
+# ── Phase 1: Default subdomain — always provision ────────────────────────────
+
+- name: Check if TLS cert exists for default domain {{ item.id }}
+  stat:
+    path: "/etc/letsencrypt/live/{{ _default_domain }}/fullchain.pem"
+  register: _default_cert_stat
+
+- name: Check if TLS cert exists for default admin domain {{ item.id }}
+  stat:
+    path: "/etc/letsencrypt/live/admin.{{ _default_domain }}/fullchain.pem"
+  register: _default_admin_cert_stat
+
+- name: Deploy Nginx vhost for default domain {{ item.id }}
+  template:
+    src: ../../SourceFiles/nginx-vhost.conf.j2
+    dest: "/etc/nginx/sites-available/{{ _default_domain }}.conf"
+    owner: root
+    group: root
+    mode: '0644'
+  vars:
+    _vhost_domain: "{{ _default_domain }}"
+    _tls_cert_exists: "{{ _default_cert_stat.stat.exists }}"
+
+- name: Deploy Admin Nginx vhost for default domain {{ item.id }}
+  template:
+    src: ../../SourceFiles/AdminPortal/nginx-vhost-admin.conf.j2
+    dest: "/etc/nginx/sites-available/admin.{{ _default_domain }}.conf"
+    owner: root
+    group: root
+    mode: '0644'
+  vars:
+    _vhost_domain: "{{ _default_domain }}"
+    _admin_tls_cert_exists: "{{ _default_admin_cert_stat.stat.exists }}"
+
+- name: Enable Nginx vhost for default domain {{ item.id }}
+  file:
+    src: "/etc/nginx/sites-available/{{ _default_domain }}.conf"
+    dest: "/etc/nginx/sites-enabled/{{ _default_domain }}.conf"
+    state: link
+
+- name: Enable Admin Nginx vhost for default domain {{ item.id }}
+  file:
+    src: "/etc/nginx/sites-available/admin.{{ _default_domain }}.conf"
+    dest: "/etc/nginx/sites-enabled/admin.{{ _default_domain }}.conf"
+    state: link
+
+- name: Reload Nginx for certbot validation (default domain)
+  service:
+    name: nginx
+    state: reloaded
+
+- name: Obtain TLS certificate for default domain {{ item.id }}
+  command: >
+    certbot certonly --webroot -w /var/www/html
+    -d {{ _default_domain }}
+    --email {{ redoubt_email }}
+    --agree-tos --non-interactive
+  args:
+    creates: "/etc/letsencrypt/live/{{ _default_domain }}/fullchain.pem"
+
+- name: Obtain TLS certificate for default admin domain {{ item.id }}
+  command: >
+    certbot certonly --webroot -w /var/www/html
+    -d admin.{{ _default_domain }}
+    --email {{ redoubt_email }}
+    --agree-tos --non-interactive
+  args:
+    creates: "/etc/letsencrypt/live/admin.{{ _default_domain }}/fullchain.pem"
+
+- name: Re-deploy Nginx vhost with TLS for default domain {{ item.id }}
+  template:
+    src: ../../SourceFiles/nginx-vhost.conf.j2
+    dest: "/etc/nginx/sites-available/{{ _default_domain }}.conf"
+    owner: root
+    group: root
+    mode: '0644'
+  vars:
+    _vhost_domain: "{{ _default_domain }}"
+    _tls_cert_exists: true
+
+- name: Re-deploy Admin Nginx vhost with TLS for default domain {{ item.id }}
+  template:
+    src: ../../SourceFiles/AdminPortal/nginx-vhost-admin.conf.j2
+    dest: "/etc/nginx/sites-available/admin.{{ _default_domain }}.conf"
+    owner: root
+    group: root
+    mode: '0644'
+  vars:
+    _vhost_domain: "{{ _default_domain }}"
+    _admin_tls_cert_exists: true
+
+# ── Phase 2: Custom domain — attempt if DNS is ready ─────────────────────────
+# Certbot will fail if DNS for the custom domain doesn't point here yet.
+# That's fine — the default subdomain is already serving.  On re-provision
+# (triggered by the BillingService cron once DNS resolves), certbot succeeds
+# and the custom domain vhost goes live, replacing the default with a redirect.
+
+# ── DNS check — must come before certbot ─────────────────────────────────────
+# Check whether the custom domain resolves to this server BEFORE attempting
+# certbot.  This prevents burning certbot rate-limit attempts on domains that
+# haven't been pointed here yet.  It also acts as the gate for the redirect:
+# we only redirect the default subdomain once DNS is confirmed stable.
+#
+# Query Google's public resolver (@8.8.8.8) directly to bypass the server's
+# local DNS cache (systemd-resolved TTL can be up to an hour), which would
+# otherwise return a stale hit from a prior test and let certbot run against
+# a domain that no longer points here.
+
+- name: Check DNS resolution for custom domain {{ item.id }}
+  command: "dig +short {{ item.fulldomain }}"
+  register: _custom_domain_dig
+  changed_when: false
+  when: _has_custom_domain | bool
+
+- name: Set custom domain DNS fact for {{ item.id }}
+  set_fact:
+    _custom_domain_dns_ok: "{{ ansible_default_ipv4.address in (_custom_domain_dig.stdout_lines | default([])) }}"
+  when: _has_custom_domain | bool
+
+# ── Deploy custom domain vhosts (HTTP-only initially) ────────────────────────
+# Always deploy so the ACME challenge path is available if/when DNS resolves.
+# Cert stat check lets us render the TLS block if a cert already exists from
+# a prior run (idempotent re-provision).
+
+- name: Check if TLS cert exists for custom domain {{ item.id }}
+  stat:
+    path: "/etc/letsencrypt/live/{{ item.fulldomain }}/fullchain.pem"
+  register: _custom_cert_stat
+  when: _has_custom_domain | bool
+
+- name: Check if TLS cert exists for custom admin domain {{ item.id }}
+  stat:
+    path: "/etc/letsencrypt/live/admin.{{ item.fulldomain }}/fullchain.pem"
+  register: _custom_admin_cert_stat
+  when: _has_custom_domain | bool
+
+- name: Deploy Nginx vhost for custom domain {{ item.id }}
+  template:
+    src: ../../SourceFiles/nginx-vhost.conf.j2
+    dest: "/etc/nginx/sites-available/{{ item.fulldomain }}.conf"
+    owner: root
+    group: root
+    mode: '0644'
+  vars:
+    _vhost_domain: "{{ item.fulldomain }}"
+    _tls_cert_exists: "{{ _custom_cert_stat.stat.exists | default(false) }}"
+  when: _has_custom_domain | bool
+
+- name: Deploy Admin Nginx vhost for custom domain {{ item.id }}
+  template:
+    src: ../../SourceFiles/AdminPortal/nginx-vhost-admin.conf.j2
+    dest: "/etc/nginx/sites-available/admin.{{ item.fulldomain }}.conf"
+    owner: root
+    group: root
+    mode: '0644'
+  vars:
+    _vhost_domain: "{{ item.fulldomain }}"
+    _admin_tls_cert_exists: "{{ _custom_admin_cert_stat.stat.exists | default(false) }}"
+  when: _has_custom_domain | bool
+
+- name: Enable Nginx vhost for custom domain {{ item.id }}
+  file:
+    src: "/etc/nginx/sites-available/{{ item.fulldomain }}.conf"
+    dest: "/etc/nginx/sites-enabled/{{ item.fulldomain }}.conf"
+    state: link
+  when: _has_custom_domain | bool
+
+- name: Enable Admin Nginx vhost for custom domain {{ item.id }}
+  file:
+    src: "/etc/nginx/sites-available/admin.{{ item.fulldomain }}.conf"
+    dest: "/etc/nginx/sites-enabled/admin.{{ item.fulldomain }}.conf"
+    state: link
+  when: _has_custom_domain | bool
+
+- name: Reload Nginx for custom domain certbot validation
+  service:
+    name: nginx
+    state: reloaded
+  when: _has_custom_domain | bool
+
+# ── Certbot — only when DNS resolves to this server ──────────────────────────
+# Skip certbot entirely if DNS isn't pointing here yet; the creates: guard
+# handles the idempotent case (cert already obtained on a prior run).
+
+- name: Attempt TLS certificate for custom domain {{ item.id }}
+  command: >
+    certbot certonly --webroot -w /var/www/html
+    -d {{ item.fulldomain }}
+    --email {{ redoubt_email }}
+    --agree-tos --non-interactive
+  args:
+    creates: "/etc/letsencrypt/live/{{ item.fulldomain }}/fullchain.pem"
+  when:
+    - _has_custom_domain | bool
+    - _custom_domain_dns_ok | default(false) | bool
+  register: _custom_certbot_result
+  ignore_errors: true
+
+- name: Attempt TLS certificate for custom admin domain {{ item.id }}
+  command: >
+    certbot certonly --webroot -w /var/www/html
+    -d admin.{{ item.fulldomain }}
+    --email {{ redoubt_email }}
+    --agree-tos --non-interactive
+  args:
+    creates: "/etc/letsencrypt/live/admin.{{ item.fulldomain }}/fullchain.pem"
+  when:
+    - _has_custom_domain | bool
+    - _custom_domain_dns_ok | default(false) | bool
+  register: _custom_admin_certbot_result
+  ignore_errors: true
+
+# Re-check cert existence after certbot attempts
+- name: Re-check custom domain cert after certbot for {{ item.id }}
+  stat:
+    path: "/etc/letsencrypt/live/{{ item.fulldomain }}/fullchain.pem"
+  register: _custom_cert_final
+  when: _has_custom_domain | bool
+
+- name: Re-check custom admin domain cert after certbot for {{ item.id }}
+  stat:
+    path: "/etc/letsencrypt/live/admin.{{ item.fulldomain }}/fullchain.pem"
+  register: _custom_admin_cert_final
+  when: _has_custom_domain | bool
+
+- name: Re-deploy Nginx vhost with TLS for custom domain {{ item.id }}
+  template:
+    src: ../../SourceFiles/nginx-vhost.conf.j2
+    dest: "/etc/nginx/sites-available/{{ item.fulldomain }}.conf"
+    owner: root
+    group: root
+    mode: '0644'
+  vars:
+    _vhost_domain: "{{ item.fulldomain }}"
+    _tls_cert_exists: true
+  when:
+    - _has_custom_domain | bool
+    - _custom_cert_final.stat.exists | default(false)
+
+- name: Re-deploy Admin Nginx vhost with TLS for custom domain {{ item.id }}
+  template:
+    src: ../../SourceFiles/AdminPortal/nginx-vhost-admin.conf.j2
+    dest: "/etc/nginx/sites-available/admin.{{ item.fulldomain }}.conf"
+    owner: root
+    group: root
+    mode: '0644'
+  vars:
+    _vhost_domain: "{{ item.fulldomain }}"
+    _admin_tls_cert_exists: true
+  when:
+    - _has_custom_domain | bool
+    - _custom_admin_cert_final.stat.exists | default(false)
+
+- name: Check DNS resolution for custom domain {{ item.id }}
+  command: "dig +short {{ item.fulldomain }}"
+  register: _custom_domain_dig
+  changed_when: false
+  when: _has_custom_domain | bool
+
+- name: Set custom domain DNS fact for {{ item.id }}
+  set_fact:
+    _custom_domain_dns_ok: "{{ ansible_default_ipv4.address in (_custom_domain_dig.stdout_lines | default([])) }}"
+  when: _has_custom_domain | bool
+
+# ── Custom domain active: redirect default subdomain ─────────────────────────
+# Once the custom domain has a valid cert AND DNS resolves to this server,
+# replace the default subdomain vhost with a 301 redirect.  The old LE cert
+# is preserved so the redirect itself serves over HTTPS without browser warnings.
+
+- name: Replace default subdomain vhost with redirect to custom domain for {{ item.id }}
+  template:
+    src: ../../SourceFiles/nginx-vhost-redirect.conf.j2
+    dest: "/etc/nginx/sites-available/{{ _default_domain }}.conf"
+    owner: root
+    group: root
+    mode: '0644'
+  vars:
+    _redirect_from: "{{ _default_domain }}"
+    _redirect_tls_cert_exists: true
+  when:
+    - _has_custom_domain | bool
+    - _custom_cert_final.stat.exists | default(false)
+    - _custom_domain_dns_ok | default(false) | bool
+
+- name: Replace default admin subdomain vhost with redirect for {{ item.id }}
+  template:
+    src: ../../SourceFiles/nginx-vhost-redirect.conf.j2
+    dest: "/etc/nginx/sites-available/admin.{{ _default_domain }}.conf"
+    owner: root
+    group: root
+    mode: '0644'
+  vars:
+    _redirect_from: "admin.{{ _default_domain }}"
+    _redirect_tls_cert_exists: true
+  when:
+    - _has_custom_domain | bool
+    - _custom_admin_cert_final.stat.exists | default(false)
+    - _custom_domain_dns_ok | default(false) | bool
+
+# ── Set custom domain status fact for billing callback ───────────────────────
+- name: Set custom domain status for billing callback for {{ item.id }}
+  set_fact:
+    _custom_domain_active: >-
+      {{ (_has_custom_domain | bool)
+         and (_custom_cert_final.stat.exists | default(false))
+         and (_custom_domain_dns_ok | default(false) | bool) }}
+
+# ── Element Web config ───────────────────────────────────────────────────────
+# Deployed after TLS so we know which domain is actually serving.
+# base_url points to the active serving domain (custom if cert is live,
+# default subdomain otherwise).  server_name is always item.fulldomain
+# (Synapse's immutable identity — the domain shown in Matrix user IDs).
+
+- name: Set serving domain for Element config for {{ item.id }}
+  set_fact:
+    _serving_domain: "{{ item.fulldomain if (_custom_domain_active | bool) else _default_domain }}"
+
+- name: Deploy Element Web config for {{ item.id }}
+  template:
+    src: ../../SourceFiles/element_config.json.j2
+    dest: "/srv/matrix/{{ item.id }}_chat/client/config.json"
+    owner: "{{ admin_user }}"
+    group: www-data
+    mode: '0644'
+
+- name: Ensure macaroon secret key exists for {{ item.id }}
+  shell: "openssl rand -hex 64 > '/srv/matrix/{{ item.id }}_chat/config/macaroon.key'"
+  args:
+    creates: "/srv/matrix/{{ item.id }}_chat/config/macaroon.key"
+
+- name: Set Macaroon.Key permissions for {{ item.id }}
+  file:
+    path: "/srv/matrix/{{ item.id }}_chat/config/macaroon.key"
+    owner: 991
+    group: 991
+    mode: '0600'    
+
+- name: Create Registration Secret for {{ item.id }}
+  shell: "openssl rand -hex 64 > '/srv/matrix/{{ item.id }}_chat/config/registration_shared_secret'"
+  args:
+    creates: "/srv/matrix/{{ item.id }}_chat/config/registration_shared_secret"
+
+- name: Set Registration Secret permissions for {{ item.id }}
+  file:
+    path: "/srv/matrix/{{ item.id }}_chat/config/registration_shared_secret"
+    owner: 991
+    group: 991
+    mode: '0600'
+
+- name: Generate admin user password for {{ item.id }}
+  shell: "openssl rand -hex 16 > '/srv/matrix/{{ item.id }}_chat/config/admin_user.password'"
+  args:
+    creates: "/srv/matrix/{{ item.id }}_chat/config/admin_user.password"
+
+- name: Set permissions on admin user password for {{ item.id }}
+  file:
+    path: "/srv/matrix/{{ item.id }}_chat/config/admin_user.password"
+    owner: root
+    group: root
+    mode: '0600'
+
+- name: Stat admin user password file for {{ item.id }}
+  stat:
+    path: "/srv/matrix/{{ item.id }}_chat/config/admin_user.password"
+  register: admin_pw_file_stat
+
+- name: Slurp admin user password for {{ item.id }}
+  slurp:
+    src: "/srv/matrix/{{ item.id }}_chat/config/admin_user.password"
+  register: admin_password_file_slurp
+  when: admin_pw_file_stat.stat.exists
+  no_log: true
+
+- name: Set tenant admin password fact for {{ item.id }}
+  set_fact:
+    tenant_admin_password: "{{ (admin_password_file_slurp.content | b64decode | trim) if admin_pw_file_stat.stat.exists else '' }}"
+  no_log: true
+
+- name: Rebuild Admin Portal image for {{ item.id }}
+  community.docker.docker_compose_v2:
+    project_src: "/srv/matrix/{{ item.id }}_chat"
+    build: always
+    services:
+      - admin-portal
+    state: present
+
+- name: Start Matrix/Element stack for {{ item.id }}
+  community.docker.docker_compose_v2:
+    project_src: "/srv/matrix/{{ item.id }}_chat"
+    state: present
+    recreate: auto
+    remove_orphans: true
+
+# docker_compose recreate: auto watches the compose file, not mounted config
+# files. Restart Synapse explicitly when homeserver.yaml content has changed.
+- name: Restart Synapse to apply updated homeserver.yaml for {{ item.id }}
+  command: docker restart {{ item.id }}_synapse
+  when:
+    - homeserver_yaml_deploy.changed
+    - homeserver_file.stat.exists  # only on re-provision; first provision starts with correct config
+  changed_when: true
+
+#- name: Wait for Synapse
+#  wait_for:
+#    host: '127.0.0.1'
+#    port: "{{ item.matrix_port }}"
+#    delay: 10
+#    timeout: 120
+#  when: not homeserver_file.stat.exists
+- name: Wait for Synapse HTTP API
+  uri:
+    url: "http://127.0.0.1:{{ item.matrix_port }}/_matrix/client/versions"
+    method: GET
+    status_code: 200
+  register: synapse_ready
+  retries: 30
+  delay: 5
+  until: synapse_ready.status == 200
+
+- name: Test Nginx configuration
+  command: nginx -t
+  register: matrix_stack_nginx_test
+  changed_when: false
+  failed_when: matrix_stack_nginx_test.rc != 0
+
+- name: Reload Nginx
+  service:
+    name: nginx
+    state: reloaded
+
+# ── Admin user provisioning ────────────────────────────────────────────────────
+# Guard: sentinel file is written only after all provisioning steps succeed.
+# If any step fails the sentinel is absent, so re-runs will retry cleanly.
+# register_new_matrix_user is tolerated if the user already exists (partial
+# prior run) — we still attempt to get a fresh login token in that case.
+
+- name: Set Matrix admin username for {{ item.id }}
+  set_fact:
+    matrix_admin_user: "{{ item.admin_username if (item.admin_username | default('')) | length > 0 else admin_user }}"
+
+- name: Check admin user provisioning sentinel for {{ item.id }}
+  stat:
+    path: "/srv/matrix/{{ item.id }}_chat/config/.admin_provisioned"
+  register: admin_provisioned_stat
+
+- name: Create admin user for {{ item.id }}
+  shell: >
+    docker exec {{ item.id }}_synapse
+    register_new_matrix_user
+    -c /data/homeserver.yaml
+    http://localhost:8008
+    --admin -u "{{ matrix_admin_user }}" -p "{{ tenant_admin_password }}"
+  when: not admin_provisioned_stat.stat.exists
+  register: register_user
+  failed_when: register_user.rc != 0 and 'already taken' not in register_user.stderr
+  no_log: true
+
+# Get an admin access token so we can call the Synapse Admin API for
+# post-creation setup (force password change, optional 3PID binding).
+- name: Get admin access token for post-creation setup ({{ item.id }})
+  uri:
+    url: "http://127.0.0.1:{{ item.matrix_port }}/_matrix/client/v3/login"
+    method: POST
+    body_format: json
+    body:
+      type: m.login.password
+      identifier:
+        type: m.id.user
+        user: "{{ matrix_admin_user }}"
+      password: "{{ tenant_admin_password }}"
+    status_code: 200
+  register: admin_login_for_setup
+  when: not admin_provisioned_stat.stat.exists
+  no_log: true
+
+# Force the admin user to change their password on first login.
+# Synapse requires 'password' alongside 'password_must_change' — re-setting
+# the same password is harmless since we just created the account.
+# Uses docker exec curl to avoid Ansible uri module mangling '@' in the path.
+- name: Force password change on first login for {{ item.id }}
+  shell: >
+    docker exec {{ item.id }}_synapse curl -s -f
+    -X PUT
+    -H 'Content-Type: application/json'
+    -H 'Authorization: Bearer {{ admin_login_for_setup.json.access_token }}'
+    -d '{"password": "{{ tenant_admin_password }}", "password_must_change": true}'
+    'http://localhost:8008/_synapse/admin/v2/users/@{{ matrix_admin_user }}:{{ item.fulldomain }}'
+  when: not admin_provisioned_stat.stat.exists
+  changed_when: true
+  no_log: true
+
+# Bind customer_email as a 3PID on the admin account so Synapse can send
+# password-reset emails and the customer can log in via email.
+# Skipped silently if customer_email is not in extra-vars (backwards-compatible).
+#
+# PUT /_synapse/admin/v2/users/{userId} — upsert with threepids payload.
+# Uses docker exec curl to avoid Ansible uri module mangling '@' in the path.
+- name: Bind customer email as 3PID on admin account for {{ item.id }}
+  shell: >
+    docker exec {{ item.id }}_synapse curl -s -f
+    -X PUT
+    -H 'Content-Type: application/json'
+    -H 'Authorization: Bearer {{ admin_login_for_setup.json.access_token }}'
+    -d '{"threepids": [{"medium": "email", "address": "{{ item.customer_email }}"}]}'
+    'http://localhost:8008/_synapse/admin/v2/users/@{{ matrix_admin_user }}:{{ item.fulldomain }}'
+  when:
+    - not admin_provisioned_stat.stat.exists
+    - item.customer_email is defined and item.customer_email | length > 0
+  changed_when: true
+
+# ── Credential report ──────────────────────────────────────────────────────────
+- name: Report admin credentials for {{ item.id }}
+  debug:
+    msg: |
+      TENANT {{ item.id }} — ADMIN CREDENTIALS
+
+      Matrix client:    https://{{ item.fulldomain }}
+      Admin portal:     https://admin.{{ item.fulldomain }}
+      Username:         @{{ matrix_admin_user }}:{{ item.fulldomain }}
+      Initial password: (emailed to customer; see billing callback)
+  when: not admin_provisioned_stat.stat.exists
+
+- name: Write admin provisioning sentinel for {{ item.id }}
+  file:
+    path: "/srv/matrix/{{ item.id }}_chat/config/.admin_provisioned"
+    state: touch
+    owner: root
+    group: root
+    mode: '0600'
+  when: not admin_provisioned_stat.stat.exists
+
+- name: Remove admin user password file for {{ item.id }}
+  file:
+    path: "/srv/matrix/{{ item.id }}_chat/config/admin_user.password"
+    state: absent
+
+# ── Optional add-ons ───────────────────────────────────────────────────────────
+# Each add-on is self-contained in its own task file. Conditions enforce mutual
+# exclusion between wireguard and tor at the playbook level (billing service
+# ensures only one network_addon value is set per tenant).
+#
+# Add-ons run BEFORE the billing callback so that wg_client_config (set by
+# wireguard.yml) is available for the welcome email attachment.
+
+- include_tasks: addons/wireguard.yml
+  when: item.network_addon | default('') == 'wireguard'
+
+- include_tasks: addons/tor.yml
+  when: item.network_addon | default('') == 'tor'
+
+- include_tasks: addons/teleconferencing.yml
+  when: "'teleconferencing' in (item.addons | default([]))"
+
+# ── Billing Service callback ─────────────────────────────────────────────────
+# POSTed to the Billing Service so it can send the "your service is ready" email.
+# Runs after add-ons so wg_client_config is populated when WireGuard is enabled.
+#
+# Callback is fire-and-forget (ignore_errors: true) — a failed POST does not
+# block provisioning; credentials remain available in the debug output above.
+
+- name: Notify billing service of provisioning completion for {{ item.id }}
+  uri:
+    url: "{{ billing_callback_url }}/tenants/{{ item.id }}/provisioned"
+    method: POST
+    body_format: json
+    headers:
+      Authorization: "Bearer {{ billing_callback_secret }}"
+    body:
+      tenant_id: "{{ item.id }}"
+      status: provisioned
+      plan_type: "{{ item.plan_type }}"
+      client_url: "https://{{ _serving_domain }}"
+      admin_portal_url: "https://admin.{{ _serving_domain }}"
+      admin_username: "{{ matrix_admin_user }}"
+      admin_matrix_id: "@{{ matrix_admin_user }}:{{ item.fulldomain }}"
+      initial_password: "{{ tenant_admin_password }}"
+      customer_email: "{{ item.customer_email | default('') }}"
+      total_storage_gb: "{{ (total_storage_mb | int / 1024) | int }}"
+      storage_status: "{{ 'over_quota' if (storage_shrink_blocked | default(false) | bool) else 'ok' }}"
+      storage_used_mb: "{{ storage_used_mb | default(0) }}"
+      wireguard_client_config: "{{ wg_client_config | default(omit) }}"
+      custom_domain: "{{ item.fulldomain if (_has_custom_domain | bool) else omit }}"
+      custom_domain_status: "{{ 'active' if (_custom_domain_active | bool) else ('pending' if (_has_custom_domain | bool) else omit) }}"
+    status_code: [200, 201, 202, 204]
+  when: not admin_provisioned_stat.stat.exists
+  ignore_errors: true
+  register: billing_callback_result
+
+- name: Warn if billing callback failed for {{ item.id }}
+  debug:
+    msg: >-
+      WARNING: billing callback failed
+      (HTTP {{ billing_callback_result.status | default('no response') }}).
+      Deliver credentials manually from the debug output above.
+  when:
+    - not admin_provisioned_stat.stat.exists
+    - billing_callback_result is failed
+      or (billing_callback_result.status is defined
+          and billing_callback_result.status not in [200, 201, 202, 204])

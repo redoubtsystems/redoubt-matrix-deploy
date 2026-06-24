@@ -1,0 +1,19 @@
+# Shared host and system variables: see /systemVariables.yml at project root.
+# Copy this file to inventory.develop.yml and fill in real values.
+currentHosts:
+  children:
+    control:
+      hosts:
+        control_server:
+          ansible_host: ""
+          admin_user: ""
+          enable_nopasswd_sudo: false
+
+    tenant:
+      hosts:
+        tenant_server_01:
+          ansible_host: ""
+          admin_user: ""
+          enable_nopasswd_sudo: true
+          enable_wireguard: false
+          enable_tor: false

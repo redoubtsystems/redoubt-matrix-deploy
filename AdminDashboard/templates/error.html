@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="error-container">
+  <h1>{{ title or "Error" }}</h1>
+  <p>{{ message }}</p>
+
+  {% if status %}
+    <small>Status code: {{ status }}</small>
+  {% endif %}
+
+  <div class="actions">
+    <a href="/" class="btn">Go back</a>
+  </div>
+</div>
+{% endblock %}

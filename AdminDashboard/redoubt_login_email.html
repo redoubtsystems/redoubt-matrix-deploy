@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Your Redoubt Systems Account</title>
+<style>
+  body {
+    margin: 0; padding: 0;
+    background-color: #0b0f14;
+    font-family: system-ui, -apple-system, Arial, sans-serif;
+    color: #e6e8eb;
+  }
+  .wrapper { max-width: 620px; margin: 0 auto; background-color: #0b0f14; }
+  .header {
+    background-color: #121923;
+    border-bottom: 3px solid #8b1e1e;
+    padding: 24px 32px;
+    text-align: center;
+  }
+  .header h1 { margin: 0; font-size: 1.5rem; color: #e6e8eb; letter-spacing: 0.04em; }
+  .header p { margin: 6px 0 0; color: #9aa3ad; font-size: 0.85rem; }
+  .intro {
+    padding: 28px 32px 16px;
+    font-size: 0.97rem;
+    line-height: 1.65;
+    color: #e6e8eb;
+  }
+  .cred-box {
+    margin: 0 32px 20px;
+    background: #121923;
+    border-radius: 6px;
+    border: 1px solid #1f2937;
+    overflow: hidden;
+  }
+  .cred-header {
+    background: #8b1e1e;
+    padding: 10px 18px;
+    color: #e6e8eb;
+    font-weight: 600;
+    font-size: 0.95rem;
+  }
+  .cred-body { padding: 16px 18px; }
+  .cred-row {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+  .cred-row:last-child { margin-bottom: 0; }
+  .cred-label {
+    color: #9aa3ad;
+    font-size: 0.85rem;
+    min-width: 72px;
+    flex-shrink: 0;
+  }
+  .code-inline {
+    background: #0b0f14;
+    border: 1px solid #374151;
+    border-radius: 4px;
+    padding: 4px 10px;
+    font-family: monospace;
+    font-size: 0.95rem;
+    color: #4ade80;
+    word-break: break-all;
+  }
+  .warning-box {
+    background: rgba(248,113,113,0.1);
+    border: 1px solid rgba(248,113,113,0.25);
+    border-radius: 4px;
+    padding: 10px 14px;
+    margin: 0 32px 24px;
+    font-size: 0.88rem;
+    color: #f87171;
+    line-height: 1.5;
+  }
+  .action-block {
+    margin: 0 32px 24px;
+    background: #121923;
+    border-radius: 6px;
+    border: 1px solid #1f2937;
+    padding: 20px 18px;
+  }
+  .action-block p { margin: 0 0 14px; font-size: 0.95rem; line-height: 1.6; }
+  .action-block p:last-child { margin-bottom: 0; }
+  .btn-link {
+    display: inline-block;
+    background: #8b1e1e;
+    color: #e6e8eb !important;
+    text-decoration: none;
+    padding: 10px 20px;
+    border-radius: 4px;
+    font-size: 0.9rem;
+    font-weight: 600;
+  }
+  .btn-link-secondary {
+    display: inline-block;
+    background: #1f2937;
+    color: #60a5fa !important;
+    text-decoration: none;
+    padding: 10px 20px;
+    border-radius: 4px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    border: 1px solid #374151;
+  }
+  .footer {
+    padding: 20px 32px;
+    border-top: 1px solid #1f2937;
+    color: #9aa3ad;
+    font-size: 0.8rem;
+    text-align: center;
+    line-height: 1.6;
+  }
+  a { color: #60a5fa; text-decoration: none; }
+</style>
+</head>
+<body>
+<div class="wrapper">
+
+  <div class="header">
+    <h1>Redoubt Systems</h1>
+    <p>Your account is ready</p>
+  </div>
+
+  <div class="intro">
+    <p>An account has been created for you on <strong>REDOUBT_SERVER_NAME</strong>.
+    Your login credentials are below.</p>
+  </div>
+
+  <div class="cred-box">
+    <div class="cred-header">Your Login Credentials</div>
+    <div class="cred-body">
+      <div class="cred-row">
+        <span class="cred-label">Username</span>
+        <span class="code-inline">REDOUBT_USERNAME</span>
+      </div>
+      <div class="cred-row">
+        <span class="cred-label">Password</span>
+        <span class="code-inline">REDOUBT_PASSWORD</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="warning-box">
+    Keep these credentials private. Do not share them with anyone. Contact your administrator if you lose access.
+  </div>
+
+  <div class="action-block">
+    <p><strong>Desktop</strong> &mdash; open your browser and sign in to your chat server:</p>
+    <a href="REDOUBT_CHAT_URL" class="btn-link">Open Chat</a>
+  </div>
+
+  <div class="action-block">
+    <p><strong>Mobile &amp; setup help</strong> &mdash; step-by-step instructions for installing the app, connecting to your server, and setting up encrypted messaging:</p>
+    <a href="https://redoubt.systems/getting-started.html" class="btn-link-secondary">View Getting Started Guide</a>
+  </div>
+
+  <div class="footer">
+    <p>Your chat server is hosted privately and your messages are end-to-end encrypted.<br><br>
+    <strong>Redoubt Systems</strong> &mdash; Sovereign. Private. Secure.</p>
+  </div>
+
+</div>
+</body>
+</html>

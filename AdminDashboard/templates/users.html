@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="panel">
+  <header class="page-header">
+    <h2>Users</h2>
+    <a href="{{ url_for('new_user_form') }}" class="btn primary">Create User</a>
+  </header>
+
+  {% if users %}
+  <table class="users-table">
+    <thead>
+      <tr>
+        <th>User</th>
+        <th>Role</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for user in users %}
+      <tr class="{% if user.deactivated %}deactivated{% endif %}">
+        <td class="mxid">
+          <a href="{{ url_for('get_user', username=user.localpart) }}" class="row-link">
+            {{ user.localpart }}
+          </a>
+        </td>
+        <td>
+          {% if user.admin %}
+            <span class="badge admin">Admin</span>
+          {% else %}
+            <span class="badge user">User</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if user.deactivated %}
+            <span class="status deactivated">Deactivated</span>
+          {% else %}
+            <span class="status active">Active</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p class="muted">No users returned from homeserver.</p>
+  {% endif %}
+</section>
+{% endblock %}
+

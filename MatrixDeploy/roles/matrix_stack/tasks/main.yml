@@ -1,0 +1,4 @@
+- include_tasks: addMatrixInstance.yml
+  loop: "{{ tenants }}"
+  loop_control:
+    loop_var: item

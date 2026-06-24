@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+
+{% block title %}Subscription{% endblock %}
+
+{% block content %}
+<section class="panel">
+  <header class="page-header">
+    <h2>Subscription</h2>
+  </header>
+
+  {% if not billing_configured %}
+  <p class="muted">
+    Billing information is not configured for this instance.
+    Contact <a href="mailto:support@redoubt.systems">support@redoubt.systems</a> for help.
+  </p>
+
+  {% elif not sub %}
+  <p class="muted">
+    Unable to load subscription details. Please try again or contact
+    <a href="mailto:support@redoubt.systems">support@redoubt.systems</a>.
+  </p>
+
+  {% else %}
+
+  <div class="sub-grid">
+
+    <div class="sub-card">
+      <div class="sub-card-label">Plan</div>
+      <div class="sub-card-value">{{ plan_display }}</div>
+      <div class="sub-card-meta">
+        {% if sub.billing_cycle == "annual" %}Annual billing{% else %}Monthly billing{% endif %}
+      </div>
+    </div>
+
+    <div class="sub-card">
+      <div class="sub-card-label">Status</div>
+      <div class="sub-card-value">
+        <span class="status-badge status-{{ sub.subscription_status }}">
+          {{ sub.subscription_status | replace("_", " ") | capitalize }}
+        </span>
+      </div>
+    </div>
+
+    {% if period_end_display %}
+    <div class="sub-card">
+      <div class="sub-card-label">Next billing date</div>
+      <div class="sub-card-value">{{ period_end_display }}</div>
+    </div>
+    {% endif %}
+
+    <div class="sub-card">
+      <div class="sub-card-label">Users</div>
+      <div class="sub-card-value">{{ max_users if max_users else "—" }}</div>
+      <div class="sub-card-meta">maximum active users</div>
+    </div>
+
+    {% if total_storage_gb is not none %}
+    <div class="sub-card">
+      <div class="sub-card-label">Storage</div>
+      <div class="sub-card-value">{{ total_storage_gb }} GB</div>
+      {% if sub.extra_storage_gb %}
+      <div class="sub-card-meta">{{ plan_features.storage_gb }} GB base + {{ sub.extra_storage_gb }} GB add-on</div>
+      {% else %}
+      <div class="sub-card-meta">included with plan</div>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    {% if plan_features %}
+    <div class="sub-card">
+      <div class="sub-card-label">Max file upload</div>
+      <div class="sub-card-value">{{ plan_features.max_upload }}</div>
+      <div class="sub-card-meta">per message attachment</div>
+    </div>
+    {% endif %}
+
+  </div>
+
+  {% set active_addons = [] %}
+  {% if sub.has_custom_domain %}
+    {% set _ = active_addons.append("Custom Domain") %}
+  {% endif %}
+  {% if sub.has_video %}
+    {% set _ = active_addons.append("Video Conferencing") %}
+  {% endif %}
+  {% if sub.extra_storage_gb %}
+    {% set _ = active_addons.append("Additional Storage (" ~ sub.extra_storage_gb ~ " GB)") %}
+  {% endif %}
+
+  {% if active_addons %}
+  <h3 class="section-heading">Add-ons</h3>
+  <ul class="addon-list">
+    {% for addon in active_addons %}
+    <li class="addon-item">{{ addon }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  {% if sub.has_custom_domain %}
+  <h3 class="section-heading">Custom Domain</h3>
+  <table class="detail-table" style="max-width:520px;">
+    <tr>
+      <th>Domain</th>
+      <td>{{ sub.custom_domain }}</td>
+    </tr>
+    <tr>
+      <th>DNS status</th>
+      <td>
+        {% if sub.domain_verified %}
+          <span class="status active">Verified</span>
+        {% else %}
+          <span class="status deactivated">Pending verification</span>
+        {% endif %}
+      </td>
+    </tr>
+  </table>
+  {% endif %}
+
+  <h3 class="section-heading">Manage Subscription</h3>
+  <p class="muted" style="margin-bottom:1rem;">
+    Update your payment method, view invoices, or cancel through the Stripe billing portal.
+    To change your plan or add-ons, contact
+    <a href="mailto:support@redoubt.systems">support@redoubt.systems</a>.
+  </p>
+  <form method="post" action="{{ url_for('subscription_portal') }}" target="_blank">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="btn primary">Open Billing Portal</button>
+  </form>
+
+  {% endif %}
+</section>
+{% endblock %}

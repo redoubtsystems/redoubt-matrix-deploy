@@ -1,0 +1,32 @@
+# Environment and secrets
+.env
+AdminDashboard/.env
+AdminDashboard/admin-portal/.env
+*.develop.yml
+
+# Keep AdminPortal Jinja2 template tracked (it uses vault vars, not real credentials)
+!MatrixDeploy/roles/SourceFiles/AdminPortal/.env
+
+# Ansible runtime artifacts
+*.retry
+.cache/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Compiled CSS (generated from SCSS at build time)
+AdminDashboard/static/css/
+AdminDashboard/admin-portal/static/css/
+
+# Editor swap files
+*.swp
+*.swo
+*.kate-swp
+
+# OS metadata
+.DS_Store
+Thumbs.db

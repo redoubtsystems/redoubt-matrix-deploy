@@ -1,0 +1,50 @@
+# --- 1. System Update ---
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: yes
+    cache_valid_time: 3600
+  become_user: root
+
+- name: Upgrade all packages
+  ansible.builtin.apt:
+    upgrade: dist
+  become_user: root
+
+# --- 2. Create admin user ---
+- name: Create Admin user
+  ansible.builtin.user:
+    name: "{{ admin_user }}"
+    password: "{{ ansible_become_password | password_hash('sha512') }}"
+    groups: sudo
+    shell: /bin/bash
+    create_home: true
+    state: present
+  become_user: root
+
+# --- 3. Set up SSH keys ---
+- name: Ensure .ssh directory exists
+  ansible.builtin.file:
+    path: "/home/{{ admin_user }}/.ssh"
+    state: directory
+    mode: '0700'
+    owner: "{{ admin_user }}"
+    group: "{{ admin_user }}"
+  become_user: root
+
+- name: Add SSH key for admin user
+  ansible.builtin.authorized_key:
+    user: "{{ admin_user }}"
+    state: present
+    exclusive: true
+    key: "{{ lookup('file', lookup('env', 'HOME') + '/.ssh/id_ed25519.pub') }}"
+  become_user: root
+
+# --- 4. Passwordless sudo (tenant servers only) ---
+- name: Grant admin user passwordless sudo
+  ansible.builtin.copy:
+    dest: "/etc/sudoers.d/{{ admin_user }}"
+    content: "{{ admin_user }} ALL=(ALL) NOPASSWD:ALL\n"
+    mode: '0440'
+    validate: 'visudo -cf %s'
+  become_user: root
+  when: enable_nopasswd_sudo | bool

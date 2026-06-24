@@ -1,0 +1,302 @@
+# Permanently remove a tenant: destroy containers, images, networks, storage,
+# Nginx vhosts, TLS certs, firewall rules, and all add-on resources.
+# THIS IS DESTRUCTIVE AND IRREVERSIBLE.
+
+# ── Tear down Docker Compose stacks ────────────────────────────────────────
+
+# Teleconferencing stack (separate compose project)
+- name: Check if teleconf compose file exists for {{ item.id }}
+  stat:
+    path: "/srv/matrix/{{ item.id }}_chat/compose-teleconf.yaml"
+  register: teleconf_compose_stat
+
+- name: Tear down teleconferencing stack for {{ item.id }}
+  community.docker.docker_compose_v2:
+    project_src: "/srv/matrix/{{ item.id }}_chat"
+    project_name: "{{ item.id }}_teleconf"
+    files:
+      - compose-teleconf.yaml
+    state: absent
+    remove_orphans: true
+  when: teleconf_compose_stat.stat.exists
+
+# Core stack
+- name: Check if compose file exists for {{ item.id }}
+  stat:
+    path: "/srv/matrix/{{ item.id }}_chat/compose.yaml"
+  register: compose_file_stat
+
+- name: Tear down core Matrix stack for {{ item.id }}
+  community.docker.docker_compose_v2:
+    project_src: "/srv/matrix/{{ item.id }}_chat"
+    state: absent
+    remove_orphans: true
+  when: compose_file_stat.stat.exists
+
+# Remove the Docker network explicitly in case compose left it behind
+- name: Remove Docker network for {{ item.id }}
+  community.docker.docker_network:
+    name: "{{ item.id }}_matrix_net"
+    state: absent
+    force: true
+  ignore_errors: true
+
+# ── WireGuard teardown ─────────────────────────────────────────────────────
+
+- name: Check if WireGuard interface exists for {{ item.id }}
+  stat:
+    path: "/etc/wireguard/wg{{ item.id }}.conf"
+  register: wg_conf_stat
+
+- name: Stop and disable WireGuard interface for {{ item.id }}
+  systemd:
+    name: "wg-quick@wg{{ item.id }}"
+    state: stopped
+    enabled: false
+  when: wg_conf_stat.stat.exists
+  ignore_errors: true
+
+- name: Remove WireGuard config and keys for {{ item.id }}
+  file:
+    path: "{{ wg_file }}"
+    state: absent
+  loop:
+    - "/etc/wireguard/wg{{ item.id }}.conf"
+    - "/etc/wireguard/wg{{ item.id }}.key"
+    - "/etc/wireguard/wg{{ item.id }}.pub"
+    - "/etc/wireguard/wg{{ item.id }}_client.key"
+    - "/etc/wireguard/wg{{ item.id }}_client.pub"
+  loop_control:
+    loop_var: wg_file
+
+- name: Close WireGuard UDP port via UFW for {{ item.id }}
+  ufw:
+    rule: allow
+    port: "{{ item.wireguard_port }}"
+    proto: udp
+    delete: true
+  when: item.wireguard_port is defined
+  ignore_errors: true
+
+# ── TOR teardown ───────────────────────────────────────────────────────────
+
+- name: Check if TOR config exists for {{ item.id }}
+  stat:
+    path: "/etc/tor/torrc.d/{{ item.id }}.conf"
+  register: tor_conf_stat
+
+- name: Remove TOR hidden service config for {{ item.id }}
+  file:
+    path: "/etc/tor/torrc.d/{{ item.id }}.conf"
+    state: absent
+
+- name: Remove TOR hidden service directories for {{ item.id }}
+  file:
+    path: "{{ tor_dir }}"
+    state: absent
+  loop:
+    - "/var/lib/tor/{{ item.id }}_matrix"
+    - "/var/lib/tor/{{ item.id }}_admin"
+  loop_control:
+    loop_var: tor_dir
+
+- name: Reload TOR after removing {{ item.id }}
+  service:
+    name: tor
+    state: reloaded
+  when: tor_conf_stat.stat.exists
+  ignore_errors: true
+
+# ── Teleconferencing firewall teardown ─────────────────────────────────────
+
+- name: Close teleconferencing ports via UFW for {{ item.id }}
+  ufw:
+    rule: allow
+    port: "{{ lk_port.port }}"
+    proto: "{{ lk_port.proto }}"
+    delete: true
+  loop:
+    - { port: "{{ item.livekit_tls_port | default(0) }}", proto: tcp }
+    - { port: "{{ item.livekit_media_port | default(0) }}", proto: udp }
+  loop_control:
+    loop_var: lk_port
+  when: "'teleconferencing' in (item.addons | default([]))"
+  ignore_errors: true
+
+# ── Nginx catch-all (ensure it exists before removing tenant vhosts) ─────
+# Without this, removing a tenant's vhost can cause Nginx to route unmatched
+# hostnames to a surviving tenant's server block.
+
+- name: Generate self-signed default cert (if absent)
+  command: >
+    openssl req -x509 -nodes -days 3650 -newkey rsa:2048
+    -keyout /etc/nginx/self-signed-default.key
+    -out /etc/nginx/self-signed-default.crt
+    -subj "/CN=_"
+  args:
+    creates: /etc/nginx/self-signed-default.crt
+
+- name: Deploy Nginx default catch-all vhost for {{ item.id }}
+  copy:
+    src: ../../SourceFiles/nginx-default-catchall.conf
+    dest: /etc/nginx/sites-available/000-default-catchall.conf
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Enable Nginx default catch-all vhost for {{ item.id }}
+  file:
+    src: /etc/nginx/sites-available/000-default-catchall.conf
+    dest: /etc/nginx/sites-enabled/000-default-catchall.conf
+    state: link
+
+- name: Remove Ubuntu default Nginx vhost (conflicts with catch-all default_server)
+  file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+
+# ── Nginx teardown ─────────────────────────────────────────────────────────
+
+- name: Remove Nginx vhost symlinks for {{ item.id }}
+  file:
+    path: "{{ vhost_link }}"
+    state: absent
+  loop:
+    - "/etc/nginx/sites-enabled/{{ item.fulldomain }}.conf"
+    - "/etc/nginx/sites-enabled/admin.{{ item.fulldomain }}.conf"
+  loop_control:
+    loop_var: vhost_link
+
+- name: Remove Nginx vhost configs for {{ item.id }}
+  file:
+    path: "{{ vhost_conf }}"
+    state: absent
+  loop:
+    - "/etc/nginx/sites-available/{{ item.fulldomain }}.conf"
+    - "/etc/nginx/sites-available/admin.{{ item.fulldomain }}.conf"
+  loop_control:
+    loop_var: vhost_conf
+
+# When a custom domain was configured, the default subdomain has its own
+# vhost (either the working vhost from Phase 1 or the redirect vhost from
+# Phase 2). Remove those too so stale configs don't break nginx -t.
+- name: Remove default subdomain Nginx vhost symlinks for {{ item.id }}
+  file:
+    path: "{{ vhost_link }}"
+    state: absent
+  loop:
+    - "/etc/nginx/sites-enabled/{{ item.default_subdomain }}.conf"
+    - "/etc/nginx/sites-enabled/admin.{{ item.default_subdomain }}.conf"
+  loop_control:
+    loop_var: vhost_link
+  when:
+    - item.default_subdomain is defined
+    - item.default_subdomain | length > 0
+    - item.default_subdomain != item.fulldomain
+
+- name: Remove default subdomain Nginx vhost configs for {{ item.id }}
+  file:
+    path: "{{ vhost_conf }}"
+    state: absent
+  loop:
+    - "/etc/nginx/sites-available/{{ item.default_subdomain }}.conf"
+    - "/etc/nginx/sites-available/admin.{{ item.default_subdomain }}.conf"
+  loop_control:
+    loop_var: vhost_conf
+  when:
+    - item.default_subdomain is defined
+    - item.default_subdomain | length > 0
+    - item.default_subdomain != item.fulldomain
+
+- name: Test Nginx configuration after removing {{ item.id }}
+  command: nginx -t
+  register: remove_nginx_test
+  changed_when: false
+  failed_when: remove_nginx_test.rc != 0
+
+- name: Reload Nginx after removing {{ item.id }}
+  service:
+    name: nginx
+    state: reloaded
+
+# ── TLS certificates ──────────────────────────────────────────────────────
+
+- name: Delete TLS certificates for {{ item.id }}
+  command: "certbot delete --cert-name {{ cert_name }} --non-interactive"
+  loop:
+    - "{{ item.fulldomain }}"
+    - "admin.{{ item.fulldomain }}"
+  loop_control:
+    loop_var: cert_name
+  ignore_errors: true
+
+- name: Delete default subdomain TLS certificates for {{ item.id }}
+  command: "certbot delete --cert-name {{ cert_name }} --non-interactive"
+  loop:
+    - "{{ item.default_subdomain }}"
+    - "admin.{{ item.default_subdomain }}"
+  loop_control:
+    loop_var: cert_name
+  ignore_errors: true
+  when:
+    - item.default_subdomain is defined
+    - item.default_subdomain | length > 0
+    - item.default_subdomain != item.fulldomain
+
+# ── Firewall — close admin port ───────────────────────────────────────────
+
+- name: Close admin port via UFW for {{ item.id }}
+  ufw:
+    rule: allow
+    port: "{{ item.admin_port }}"
+    proto: tcp
+    delete: true
+  ignore_errors: true
+
+# ── Storage teardown ──────────────────────────────────────────────────────
+# Order matters: unmount first, then detach the loop device, then delete.
+# If the mount is still active when we hit the directory delete, rm -rf will
+# grind through a live filesystem and saturate disk I/O for minutes.
+
+- name: Check if data mount exists for {{ item.id }}
+  command: mountpoint -q /srv/matrix/{{ item.id }}_chat/data
+  register: data_mountpoint_check
+  changed_when: false
+  failed_when: false
+
+- name: Unmount data image for {{ item.id }}
+  mount:
+    path: "/srv/matrix/{{ item.id }}_chat/data"
+    state: unmounted
+  when: data_mountpoint_check.rc == 0
+
+- name: Detach loop device for {{ item.id }}
+  shell: |
+    LOOP=$(losetup -j /srv/matrix/{{ item.id }}_chat/{{ item.id }}_data.img 2>/dev/null | cut -d: -f1)
+    [ -n "$LOOP" ] && losetup -d "$LOOP" || true
+  changed_when: false
+  ignore_errors: true
+
+- name: Verify data mount is gone for {{ item.id }}
+  command: mountpoint -q /srv/matrix/{{ item.id }}_chat/data
+  register: data_mount_verify
+  changed_when: false
+  failed_when: data_mount_verify.rc == 0
+
+- name: Remove fstab entry for {{ item.id }}
+  mount:
+    path: "/srv/matrix/{{ item.id }}_chat/data"
+    state: absent
+
+# ── Remove tenant directory ───────────────────────────────────────────────
+
+- name: Remove tenant directory for {{ item.id }}
+  file:
+    path: "/srv/matrix/{{ item.id }}_chat"
+    state: absent
+
+- name: Tenant {{ item.id }} removed
+  debug:
+    msg: |
+      Tenant {{ item.id }} ({{ item.fulldomain }}) has been permanently removed.
+      All containers, data, configs, certs, and firewall rules have been deleted.

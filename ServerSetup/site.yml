@@ -1,0 +1,51 @@
+- name: Bootstrap
+  hosts: currentHosts
+  become: true
+  user: "{{ admin_user }}"
+
+  vars_files: &shared_vars_files
+    - "{{ lookup('first_found', [
+        '../vaultvars.develop.yml',
+        '../vaultvars.yml'
+      ]) }}"
+
+    - "{{ lookup('first_found', [
+        '../systemVariables.develop.yml',
+        '../systemVariables.yml'
+      ]) }}"
+
+  roles:
+    - { role: bootstrap, tags: ['bootstrap'] }
+
+- name: ServerSetup
+  hosts: currentHosts
+  become: true
+  user: "{{ admin_user }}"
+
+  vars:
+    ssh_port: 22
+    allowed_ports:
+      - "{{ ssh_port }}"
+      - 80
+      - 443
+
+  vars_files: *shared_vars_files
+
+  roles:
+    - { role: harden, tags: ['harden'] }
+    - { role: base_env, tags: ['base_env'] }
+
+- name: TenantEnv
+  hosts: tenant
+  become: true
+  user: "{{ admin_user }}"
+
+  vars_files: *shared_vars_files
+
+  roles:
+    - role: wireguard
+      when: enable_wireguard | bool
+      tags: ['wireguard']
+    - role: tor
+      when: enable_tor | bool
+      tags: ['tor']

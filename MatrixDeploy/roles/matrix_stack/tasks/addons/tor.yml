@@ -1,0 +1,114 @@
+# roles/matrix_stack/tasks/addons/tor.yml
+#
+# Creates TOR hidden services for a tenant's Matrix client, homeserver, and admin portal.
+#
+# Hidden service layout:
+#   /var/lib/tor/{{ item.id }}_matrix/  →  client (port 80) + Synapse federation (port 8448)
+#   /var/lib/tor/{{ item.id }}_admin/   →  admin portal (port 80)
+#
+# Self-contained: installs tor, creates torrc.d/, and adds the %include
+# line to torrc if not already present. Safe to run if base_env already
+# handled these steps (all tasks are idempotent).
+#
+# TOR's hidden service routing bypasses Nginx — requests go directly to the
+# container ports. No TLS is needed on the .onion side; TOR provides transport
+# encryption. The .onion addresses are emitted as debug output for distribution.
+#
+# NOTE: For strict TOR-only access (no clearnet), block the public Nginx vhost
+# via UFW or remove the sites-enabled symlink after provisioning. TLS cert
+# renewal (certbot) still requires brief public HTTP access; plan accordingly.
+
+- name: "[TOR] Ensure tor is installed for {{ item.id }}"
+  package:
+    name: tor
+    state: present
+
+- name: "[TOR] Ensure torrc.d drop-in directory exists for {{ item.id }}"
+  file:
+    path: /etc/tor/torrc.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: "[TOR] Ensure torrc includes drop-in directory for {{ item.id }}"
+  lineinfile:
+    path: /etc/tor/torrc
+    line: '%include /etc/tor/torrc.d/*.conf'
+    create: false
+
+- name: "[TOR] Ensure tor service is running for {{ item.id }}"
+  service:
+    name: tor
+    state: started
+    enabled: true
+
+# A real hidden service directory always contains hs_ed25519_secret_key.
+# If that file is absent the directory is a leftover from a failed prior run
+# and must be removed so tor can create it (with correct ownership) on reload.
+- name: "[TOR] Check for existing hidden service key (matrix) for {{ item.id }}"
+  stat:
+    path: "/var/lib/tor/{{ item.id }}_matrix/hs_ed25519_secret_key"
+  register: tor_matrix_key_stat
+
+- name: "[TOR] Remove uninitialised hidden service dirs for {{ item.id }}"
+  file:
+    path: "{{ tor_stale_dir }}"
+    state: absent
+  loop:
+    - "/var/lib/tor/{{ item.id }}_matrix"
+    - "/var/lib/tor/{{ item.id }}_admin"
+  loop_control:
+    loop_var: tor_stale_dir
+  when: not tor_matrix_key_stat.stat.exists
+
+- name: "[TOR] Deploy torrc snippet for {{ item.id }}"
+  template:
+    src: ../../../SourceFiles/TOR/torrc-hidden-service.conf.j2
+    dest: "/etc/tor/torrc.d/{{ item.id }}.conf"
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: "[TOR] Reload TOR service to register hidden services for {{ item.id }}"
+  service:
+    name: tor
+    state: reloaded
+
+- name: "[TOR] Wait for .onion hostname file (matrix) for {{ item.id }}"
+  wait_for:
+    path: "/var/lib/tor/{{ item.id }}_matrix/hostname"
+    timeout: 60
+
+- name: "[TOR] Wait for .onion hostname file (admin) for {{ item.id }}"
+  wait_for:
+    path: "/var/lib/tor/{{ item.id }}_admin/hostname"
+    timeout: 60
+
+- name: "[TOR] Read .onion hostnames for {{ item.id }}"
+  slurp:
+    src: "{{ onion_file }}"
+  register: onion_hostnames_raw
+  loop:
+    - "/var/lib/tor/{{ item.id }}_matrix/hostname"
+    - "/var/lib/tor/{{ item.id }}_admin/hostname"
+  loop_control:
+    loop_var: onion_file
+
+# results[0] = matrix onion, results[1] = admin onion
+- name: "[TOR] Set .onion hostname facts for {{ item.id }}"
+  set_fact:
+    matrix_onion: "{{ onion_hostnames_raw.results[0].content | b64decode | trim }}"
+    admin_onion: "{{ onion_hostnames_raw.results[1].content | b64decode | trim }}"
+
+- name: "[TOR] Report .onion addresses for {{ item.id }}"
+  debug:
+    msg: |
+      TOR hidden services are active for {{ item.id }}.
+
+      Matrix client:   http://{{ matrix_onion }}       (port 80  → {{ item.element_port }})
+      Matrix server:   http://{{ matrix_onion }}:8448   (port 8448 → {{ item.matrix_port }})
+      Admin portal:    http://{{ admin_onion }}          (port 80  → {{ item.admin_port }})
+
+      Distribute these .onion addresses to the tenant.
+      Clients must use the Tor Browser or a Tor-aware Matrix client to connect.

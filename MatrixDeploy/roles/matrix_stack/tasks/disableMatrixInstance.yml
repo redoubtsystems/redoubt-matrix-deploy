@@ -1,0 +1,77 @@
+# Soft-disable a tenant: stop all containers and disable Nginx vhosts.
+# All data, configs, certs, and firewall rules are left in place.
+# Re-provision with addTenant.yml to reactivate.
+
+# ── Stop core Docker Compose stack ──────────────────────────────────────────
+
+- name: Check if compose file exists for {{ item.id }}
+  stat:
+    path: "/srv/matrix/{{ item.id }}_chat/compose.yaml"
+  register: compose_file_stat
+
+- name: Stop core Matrix stack for {{ item.id }}
+  community.docker.docker_compose_v2:
+    project_src: "/srv/matrix/{{ item.id }}_chat"
+    state: stopped
+  when: compose_file_stat.stat.exists
+
+# ── Stop teleconferencing stack (if present) ────────────────────────────────
+
+- name: Check if teleconf compose file exists for {{ item.id }}
+  stat:
+    path: "/srv/matrix/{{ item.id }}_chat/compose-teleconf.yaml"
+  register: teleconf_compose_stat
+
+- name: Stop teleconferencing stack for {{ item.id }}
+  community.docker.docker_compose_v2:
+    project_src: "/srv/matrix/{{ item.id }}_chat"
+    project_name: "{{ item.id }}_teleconf"
+    files:
+      - compose-teleconf.yaml
+    state: stopped
+  when: teleconf_compose_stat.stat.exists
+
+# ── Stop WireGuard interface (if present) ───────────────────────────────────
+
+- name: Check if WireGuard interface exists for {{ item.id }}
+  stat:
+    path: "/etc/wireguard/wg{{ item.id }}.conf"
+  register: wg_conf_stat
+
+- name: Stop WireGuard interface for {{ item.id }}
+  systemd:
+    name: "wg-quick@wg{{ item.id }}"
+    state: stopped
+    enabled: false
+  when: wg_conf_stat.stat.exists
+
+# ── Disable Nginx vhosts ───────────────────────────────────────────────────
+
+- name: Disable Nginx vhost for {{ item.id }}
+  file:
+    path: "/etc/nginx/sites-enabled/{{ item.fulldomain }}.conf"
+    state: absent
+
+- name: Disable Admin Nginx vhost for {{ item.id }}
+  file:
+    path: "/etc/nginx/sites-enabled/admin.{{ item.fulldomain }}.conf"
+    state: absent
+
+- name: Test Nginx configuration after disabling {{ item.id }}
+  command: nginx -t
+  register: disable_nginx_test
+  changed_when: false
+  failed_when: disable_nginx_test.rc != 0
+
+- name: Reload Nginx after disabling {{ item.id }}
+  service:
+    name: nginx
+    state: reloaded
+
+- name: Tenant {{ item.id }} disabled
+  debug:
+    msg: |
+      Tenant {{ item.id }} ({{ item.fulldomain }}) is now disabled.
+      Containers stopped, Nginx vhosts unlinked.
+      Data preserved at /srv/matrix/{{ item.id }}_chat/.
+      Re-run addTenant.yml with the same vars to reactivate.

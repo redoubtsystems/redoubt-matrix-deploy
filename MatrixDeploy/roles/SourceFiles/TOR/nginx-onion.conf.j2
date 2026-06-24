@@ -1,0 +1,24 @@
+# Nginx vhost placeholder for TOR .onion access — tenant {{ item.id }}
+# Managed by Ansible — NOT currently deployed (TOR routes directly to containers).
+#
+# This file is a placeholder for future enhancements that require Nginx to sit
+# between TOR and the containers. Use cases:
+#
+#   1. Serving Element Web with a .onion-specific config.json so the client
+#      connects to the .onion homeserver instead of the clearnet domain.
+#      (Requires a dedicated local port and a separate element_config.json
+#      rendered with the .onion homeserver URL)
+#
+#   2. Adding TOR-specific response headers or stripping headers that leak
+#      the clearnet hostname.
+#
+#   3. Implementing per-tenant access logging separate from clearnet traffic.
+#
+# To activate: remove the comment block, assign a dedicated local port
+# (e.g., element_onion_port), update the torrc to point to that port instead
+# of item.element_port, and deploy this vhost.
+#
+# Current state: TOR's torrc maps .onion ports directly to container ports.
+# See: roles/SourceFiles/TOR/torrc-hidden-service.conf.j2
+
+# (No active server blocks)

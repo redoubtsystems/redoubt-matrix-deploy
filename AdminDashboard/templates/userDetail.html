@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+
+{% block title %}
+User: {{ user.name }}
+{% endblock %}
+
+{% block content %}
+<section class="user-detail panel">
+
+  <header class="page-header">
+    <h1>User Details</h1>
+    <p class="muted">{{ user.name }}</p>
+  </header>
+
+  <table class="detail-table">
+    <tbody>
+      <tr>
+        <th>Username</th>
+        <td>{{ user.name }}</td>
+      </tr>
+
+      <tr>
+        <th>Display Name</th>
+        <td>{{ user.displayname or "—" }}</td>
+      </tr>
+
+      <tr>
+        <th>Admin</th>
+        <td>{{ "Yes" if user.admin else "No" }}</td>
+      </tr>
+
+      <tr>
+        <th>Shadow Banned</th>
+        <td>{{ "Yes" if user.shadow_banned else "No" }}</td>
+      </tr>
+
+      <tr>
+        <th>Suspended</th>
+        <td>{{ "Yes" if user.suspended else "No" }}</td>
+      </tr>
+
+      <tr>
+        <th>Locked</th>
+        <td>{{ "Yes" if user.locked else "No" }}</td>
+      </tr>
+
+      <tr>
+        <th>Deactivated</th>
+        <td>{{ "Yes" if user.deactivated else "No" }}</td>
+      </tr>
+    </tbody>
+  </table>
+
+  {% set localpart = user.name.split(':')[0][1:] %}
+
+  {% if not user.deactivated %}
+
+  <h2 class="section-heading">Reset Password</h2>
+  <form method="post"
+        action="{{ url_for('reset_password', username=localpart) }}"
+        class="form inline-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="form-group">
+      <label for="new_password">New Password</label>
+      <input type="password" id="new_password" name="new_password"
+             placeholder="New password" required minlength="8" />
+    </div>
+    <div class="actions">
+      <button type="submit" class="btn secondary">Set Password</button>
+    </div>
+  </form>
+
+  <h2 class="section-heading">Resend Invite</h2>
+  <p class="muted">Sends a new invite link and resets the account password.
+  The user will be signed out of all devices and must use the link to
+  regain access.</p>
+  <form method="post"
+        action="{{ url_for('resend_invite', username=localpart) }}"
+        class="form inline-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="form-group">
+      <label for="invite_email">User's Email Address</label>
+      <input type="email" id="invite_email" name="email"
+             placeholder="user@example.com" required />
+    </div>
+    <div class="actions">
+      <button type="submit" class="btn secondary">Send Invite</button>
+    </div>
+  </form>
+
+  {% endif %}
+
+  <div class="actions actions-footer">
+    {% if not user.deactivated %}
+    <form method="post"
+          action="{{ url_for('deactivate_user', username=localpart) }}"
+          onsubmit="return confirm('Deactivate {{ user.name }}? This cannot be undone.');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn danger" type="submit">Deactivate User</button>
+    </form>
+    {% endif %}
+
+    <a class="button secondary" href="{{ url_for('get_users') }}">
+      Back to Users
+    </a>
+  </div>
+
+</section>
+{% endblock %}

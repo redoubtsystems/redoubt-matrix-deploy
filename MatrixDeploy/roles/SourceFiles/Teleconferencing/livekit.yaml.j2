@@ -1,0 +1,36 @@
+# LiveKit SFU configuration for tenant {{ item.id }}
+# Managed by Ansible — do not edit manually.
+# Deployed to: /srv/matrix/{{ item.id }}_chat/teleconf/livekit.yaml
+# Container:   {{ item.id }}_livekit
+
+# HTTP/WebSocket API — proxied by Nginx on the tenant domain at /livekit/sfu/
+# Bound to localhost only; Nginx proxies /livekit/sfu/ to this port.
+# Uses host networking — no Docker port translation.
+port: {{ item.livekit_api_port }}
+bind_addresses:
+    - "127.0.0.1"
+
+rtc:
+    # TCP fallback for clients that can't reach UDP (corporate firewalls, etc.)
+    tcp_port: {{ item.livekit_tls_port }}
+    # Single UDP port for WebRTC media (multiplexed).
+    # Host networking — LiveKit binds directly on the host interface.
+    port_range_start: {{ item.livekit_media_port }}
+    port_range_end: {{ item.livekit_media_port }}
+    # Advertise the VPS public IP so remote clients send media here.
+    node_ip: {{ ansible_host }}
+    use_external_ip: false
+    enable_loopback_candidate: false
+
+room:
+    auto_create: true
+    empty_timeout: 300
+
+turn:
+    enabled: false
+
+keys:
+    {{ livekit_api_key }}: {{ livekit_api_secret }}
+
+logging:
+    level: info

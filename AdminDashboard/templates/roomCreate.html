@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+
+{% block title %}Create Room{% endblock %}
+
+{% block content %}
+<section class="user-create panel">
+
+  <header class="page-header">
+    <h1>Create Room</h1>
+    <a href="{{ url_for('get_rooms') }}" class="btn secondary">Cancel</a>
+  </header>
+
+  <form method="post" action="{{ url_for('create_room') }}" class="form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+    <div class="form-group">
+      <label for="name">Room Name</label>
+      <input
+        type="text"
+        id="name"
+        name="name"
+        placeholder="General"
+        required
+      />
+    </div>
+
+    <div class="form-group">
+      <label for="alias">Room Alias <span class="muted">(optional)</span></label>
+      <input
+        type="text"
+        id="alias"
+        name="alias"
+        placeholder="general"
+      />
+      <p class="muted" style="font-size:0.8rem;margin-top:0.25rem">
+        Creates <code>#alias:{{ server_name }}</code> — letters, numbers, and hyphens only.
+      </p>
+    </div>
+
+    <div class="form-group">
+      <label for="topic">Topic <span class="muted">(optional)</span></label>
+      <input
+        type="text"
+        id="topic"
+        name="topic"
+        placeholder="A place to chat"
+      />
+    </div>
+
+    <div class="form-group">
+      <label>Visibility</label>
+      <div class="radio-group">
+        <label class="radio-option">
+          <input type="radio" name="visibility" value="private" checked />
+          Private — invite only
+        </label>
+        <label class="radio-option">
+          <input type="radio" name="visibility" value="public" />
+          Public — anyone on {{ server_name }} can join
+        </label>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button type="submit" class="btn primary">Create Room</button>
+    </div>
+
+  </form>
+</section>
+{% endblock %}

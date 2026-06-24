@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+
+{% block title %}Set Your Password{% endblock %}
+
+{% block content %}
+<section class="user-create panel">
+
+  {% if success %}
+
+    <header class="page-header">
+      <h1>Account Ready</h1>
+    </header>
+    <p>Your password has been set. You can now log in to your account.</p>
+    <p>Your username is: <strong>{{ username }}</strong></p>
+    <div class="actions">
+      <a href="{{ chat_url }}" class="btn primary">Go to Chat</a>
+    </div>
+
+  {% else %}
+
+    <header class="page-header">
+      <h1>Set Your Password</h1>
+      <p class="muted">Welcome, {{ username }}. Choose a password to activate your account.</p>
+    </header>
+
+    <form method="post" class="form">
+
+      <div class="form-group">
+        <label for="password">Password</label>
+        <input
+          type="password"
+          id="password"
+          name="password"
+          required
+          minlength="8"
+          autocomplete="new-password"
+        />
+      </div>
+
+      <div class="form-group">
+        <label for="confirm">Confirm Password</label>
+        <input
+          type="password"
+          id="confirm"
+          name="confirm"
+          required
+          minlength="8"
+          autocomplete="new-password"
+        />
+      </div>
+
+      <div class="actions">
+        <button type="submit" class="btn primary">Set Password</button>
+      </div>
+
+    </form>
+
+  {% endif %}
+
+</section>
+{% endblock %}

@@ -1,0 +1,42 @@
+- name: Add Matrix Tenant
+  hosts: currentHosts
+  become: true
+
+  vars:
+    tenants:
+      - id:               "{{ id }}"
+        plan_type:        "{{ plan_type }}"
+        domain:           "{{ domain }}"
+        fulldomain:       "{{ fulldomain }}"
+        matrix_port:      "{{ matrix_port }}"
+        element_port:     "{{ element_port }}"
+        admin_port:       "{{ admin_port }}"
+        customer_email:   "{{ customer_email | default('') }}"
+        admin_username:   "{{ admin_username | default('') }}"
+        addons:           "{{ addons | default([]) }}"
+        network_addon:    "{{ network_addon | default('') }}"
+        extra_storage_gb: "{{ extra_storage_gb | default(0) }}"
+        wireguard_port:   "{{ wireguard_port | default(omit) }}"
+        livekit_jwt_port:  "{{ livekit_jwt_port | default(omit) }}"
+        livekit_tls_port:  "{{ livekit_tls_port | default(omit) }}"
+        livekit_media_port: "{{ livekit_media_port | default(omit) }}"
+        livekit_api_port:  "{{ livekit_api_port | default(omit) }}"
+        default_subdomain: "{{ default_subdomain | default('') }}"
+
+  vars_files:
+    - "{{ lookup('first_found', [
+        '../vaultvars.develop.yml',
+        '../vaultvars.yml'
+      ]) }}"
+
+    - "{{ lookup('first_found', [
+        '../systemVariables.develop.yml',
+        '../systemVariables.yml'
+      ]) }}"
+
+  roles:
+    - { role: matrix_stack, tags: ['matrix_stack'] }
+
+# Usage (BillingService passes flat extra-vars; the play wraps them into a tenants list):
+#   ansible-playbook -i inventory.develop.yml addTenant.yml --limit ControlServer1 \
+#     --extra-vars '{"id":"1001","plan_type":"starter","domain":"redoubt","fulldomain":"1001.chat.redoubt.systems","matrix_port":3001,"element_port":3101,"admin_port":5001}'

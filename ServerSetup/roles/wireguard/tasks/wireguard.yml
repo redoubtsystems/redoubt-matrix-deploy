@@ -1,0 +1,11 @@
+# --- WireGuard Base ---
+# Installs kernel tooling only. Per-tenant interface creation, key generation,
+# peer configuration, and UFW port rules are handled by Matrix Deploy.
+# WireGuard is per-tenant: each stack gets its own wg<n> interface. There is
+# no server-wide VPN and no IP forwarding (access mode, not routing mode).
+
+- name: Install wireguard-tools
+  ansible.builtin.apt:
+    name: wireguard-tools
+    state: present
+    update_cache: true

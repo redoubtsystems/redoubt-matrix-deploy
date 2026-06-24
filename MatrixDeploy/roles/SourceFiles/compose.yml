@@ -1,0 +1,88 @@
+networks:
+  {{ item.id }}_matrix_net:
+    driver: bridge
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: "{{ item.id }}_postgres"
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: synapse
+      POSTGRES_PASSWORD: "{{ synapse_db_password }}"
+      POSTGRES_DB: synapse
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --lc-collate=C --lc-ctype=C"
+    volumes:
+      - /srv/matrix/{{ item.id }}_chat/postgres:/var/lib/postgresql/data
+    networks:
+      - {{ item.id }}_matrix_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U synapse"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  synapse:
+    image: matrixdotorg/synapse:sha-46d235c
+    container_name: "{{ item.id }}_synapse"
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - /srv/matrix/{{ item.id }}_chat/data:/data
+      - /srv/matrix/{{ item.id }}_chat/config:/config:ro
+    ports:
+      - 127.0.0.1:{{ item.matrix_port }}:8008
+    healthcheck:
+      test: ["CMD", "curl", "-fSs", "http://localhost:8008/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    networks:
+      - {{ item.id }}_matrix_net
+    {% if item.plan_type in plans %}
+deploy:
+      resources:
+        reservations:
+          memory: {{ (plans[item.plan_type].max_memory | int * 0.66) | int }}M
+        limits:
+          memory: {{ (plans[item.plan_type].max_memory | int * 0.66 * plans[item.plan_type].overcommit) | int }}M
+          cpus: {{ plans[item.plan_type].max_vcpu * 0.6 }}
+    {% endif %}
+
+  client-web:
+    image: nginx:alpine
+    container_name: "{{ item.id }}_client"
+    restart: unless-stopped
+    depends_on: 
+      - synapse      
+    volumes:
+      - /srv/matrix/{{ item.id }}_chat/client:/app/config:ro
+    ports:
+      - "127.0.0.1:{{ item.element_port }}:80"
+    networks:
+      - {{ item.id }}_matrix_net
+    {% if item.plan_type in plans %}
+deploy:
+      resources:
+        reservations:
+          memory: {{ (plans[item.plan_type].max_memory | int * 0.34) | int }}M
+        limits:
+          memory: {{ (plans[item.plan_type].max_memory | int * 0.34 * plans[item.plan_type].overcommit) | int }}M
+          cpus: {{ plans[item.plan_type].max_vcpu * 0.4 }}
+    {% endif %}
+
+  admin-portal:
+    build: ./admin-portal
+    container_name: "{{ item.id }}_admin_portal"
+    restart: unless-stopped
+    depends_on:
+      - synapse
+    ports:
+      - "127.0.0.1:{{ item.admin_port }}:5000"
+    env_file:
+      - ./admin-portal/.env
+    networks:
+      - {{ item.id }}_matrix_net  

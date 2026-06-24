@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{% block title %}Matrix Admin{% endblock %} – Redoubt Systems</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <link rel="icon" type="image/png"
+        href="{{ url_for('static', filename='img/favicon.png') }}">
+  <link rel="stylesheet"
+        href="{{ url_for('static', filename='css/admin.css') }}">
+</head>
+
+<body class="vault-bg">
+  <div class="overlay">
+
+    <header class="header">
+      <img
+        src="{{ url_for('static', filename='img/redoubt-logo.png') }}"
+        alt="Redoubt Systems"
+        class="logo"
+      >
+      <div class="header-text">
+        <h1>Matrix Admin Portal</h1>
+        <span class="server-name">{{ server_name }}</span>
+      </div>
+      {% if current_user %}
+      <div class="header-actions">
+        <span class="muted current-user">{{ current_user }}</span>
+        <form method="post" action="{{ url_for('logout') }}">
+          <button type="submit" class="btn secondary">Sign Out</button>
+        </form>
+      </div>
+      {% endif %}
+    </header>
+
+    {% if current_user %}
+    <nav class="nav">
+      <a href="{{ url_for('get_users') }}"
+         class="nav-link{% if request.endpoint in ['get_users', 'new_user_form', 'get_user', 'create_user', 'deactivate_user', 'reset_password', 'resend_invite'] %} active{% endif %}">
+        Users
+      </a>
+      <a href="{{ url_for('get_rooms') }}"
+         class="nav-link{% if request.endpoint in ['get_rooms', 'new_room_form', 'get_room', 'create_room', 'room_invite', 'room_remove_user', 'delete_room'] %} active{% endif %}">
+        Rooms
+      </a>
+      <a href="{{ url_for('get_server_status') }}"
+         class="nav-link{% if request.endpoint in ['get_server_status'] %} active{% endif %}">
+        Server
+      </a>
+      <a href="{{ url_for('subscription') }}"
+         class="nav-link{% if request.endpoint in ['subscription', 'subscription_portal'] %} active{% endif %}">
+        Subscription
+      </a>
+    </nav>
+    {% endif %}
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      <div class="flash-container">
+        {% for category, message in messages %}
+          <div class="flash {{ category }}">{{ message }}</div>
+        {% endfor %}
+      </div>
+    {% endif %}
+    {% endwith %}
+
+    <main class="content">
+      {% block content %}{% endblock %}
+    </main>
+
+    <footer class="footer">
+      <span>Redoubt Systems • Matrix Administration</span>
+    </footer>
+
+  </div>
+
+</body>
+</html>

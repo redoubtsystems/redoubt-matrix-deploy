@@ -1,0 +1,46 @@
+# Docker Compose — Teleconferencing stack for tenant {{ item.id }}
+# Managed by Ansible — do not edit manually.
+#
+# Managed as a SEPARATE Compose project ({{ item.id }}_teleconf) alongside the core stack.
+# Start command (handled by Ansible):
+#   docker compose -p {{ item.id }}_teleconf -f compose-teleconf.yaml up -d
+#
+# {{ item.id }}_matrix_net is declared external so lk-jwt-service can reach
+# Synapse for Matrix OpenID token validation.
+
+networks:
+  {{ item.id }}_matrix_net:
+    name: {{ item.id }}_chat_{{ item.id }}_matrix_net
+    external: true
+
+services:
+
+  # ── LiveKit SFU ──────────────────────────────────────────────────────────────
+  # Handles WebRTC media routing for MatrixRTC group calls.
+  # Uses host networking to avoid Docker UDP proxy issues with multi-participant calls.
+  # HTTP/WS API on 127.0.0.1:{{ item.livekit_api_port }} (proxied by Nginx).
+  # WebRTC TCP fallback on 0.0.0.0:{{ item.livekit_tls_port }} (internet-facing).
+  # WebRTC UDP media on 0.0.0.0:{{ item.livekit_media_port }} (internet-facing, single port multiplexed).
+  livekit:
+    image: livekit/livekit-server:v1.9.12
+    container_name: "{{ item.id }}_livekit"
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - /srv/matrix/{{ item.id }}_chat/teleconf/livekit.yaml:/etc/livekit.yaml:ro
+    command: ["--config", "/etc/livekit.yaml"]
+
+  # ── lk-jwt-service ──────────────────────────────────────────────────────────
+  # Validates Matrix OpenID tokens against Synapse, then issues LiveKit JWTs.
+  # Runs on 127.0.0.1:{{ item.livekit_jwt_port }} (proxied by Nginx at /livekit/jwt).
+  # Joins {{ item.id }}_matrix_net to reach Synapse for token validation.
+  lk-jwt-service:
+    image: ghcr.io/element-hq/lk-jwt-service:0.4.1
+    container_name: "{{ item.id }}_lk_jwt"
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:{{ item.livekit_jwt_port }}:8080"
+    env_file:
+      - /srv/matrix/{{ item.id }}_chat/teleconf/lk-jwt-service.env
+    networks:
+      - {{ item.id }}_matrix_net

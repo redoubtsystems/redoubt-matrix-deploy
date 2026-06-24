@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="panel login-panel">
+
+  <header class="page-header">
+    <h1>Sign In</h1>
+    <p class="muted">Matrix admin access for {{ server_name }}</p>
+  </header>
+
+  <form method="post" action="{{ url_for('login') }}" class="form">
+
+    <div class="form-group">
+      <label for="username">Username</label>
+      <input
+        type="text"
+        id="username"
+        name="username"
+        placeholder="admin"
+        autocomplete="username"
+        required
+        autofocus
+      />
+    </div>
+
+    <div class="form-group">
+      <label for="password">Password</label>
+      <input
+        type="password"
+        id="password"
+        name="password"
+        autocomplete="current-password"
+        required
+      />
+    </div>
+
+    <div class="actions">
+      <button type="submit" class="btn primary">Sign In</button>
+    </div>
+
+  </form>
+</section>
+{% endblock %}

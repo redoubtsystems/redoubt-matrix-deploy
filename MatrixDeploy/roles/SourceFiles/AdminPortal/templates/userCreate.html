@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+
+{% block title %}
+Create User
+{% endblock %}
+
+{% block content %}
+<section class="user-create panel">
+
+  <header class="page-header">
+    <h1>Create New User</h1>
+    {% if max_users %}
+      {% set remaining = max_users - active_users %}
+      <p class="muted">
+        {{ active_users }} / {{ max_users }} users &mdash;
+        {% if remaining > 0 %}
+          {{ remaining }} slot{{ 's' if remaining != 1 }} remaining
+        {% else %}
+          <span class="text-danger">User limit reached</span>
+        {% endif %}
+      </p>
+    {% else %}
+      <p class="muted">Create a Matrix account on {{ server_name }}</p>
+    {% endif %}
+  </header>
+
+  <form method="post" action="{{ url_for('create_user') }}" class="form">
+
+    <div class="form-group">
+      <label for="username">Username</label>
+      <input
+        type="text"
+        id="username"
+        name="username"
+        placeholder="alice"
+        required
+      />
+    </div>
+
+    <div class="form-group">
+      <label>Onboarding Method</label>
+      <div class="radio-group">
+        <label class="radio-option">
+          <input type="radio" name="invite_mode" value="email" id="mode_email" checked />
+          Send invite email — user sets their own password
+        </label>
+        <label class="radio-option">
+          <input type="radio" name="invite_mode" value="password" id="mode_password" />
+          Set initial password manually
+        </label>
+      </div>
+    </div>
+
+    <div class="form-group" id="email_group">
+      <label for="email">User's Email Address</label>
+      <input
+        type="email"
+        id="email"
+        name="email"
+        placeholder="alice@example.com"
+      />
+    </div>
+
+    <div class="form-group" id="password_group" style="display:none">
+      <label for="password">Initial Password</label>
+      <input
+        type="password"
+        id="password"
+        name="password"
+      />
+    </div>
+
+    <div class="form-group checkbox">
+      <label>
+        <input type="checkbox" name="admin" value="true" />
+        Administrator
+      </label>
+    </div>
+
+    <div class="actions">
+      <button type="submit" class="btn primary">
+        Create User
+      </button>
+
+      <a class="button secondary" href="{{ url_for('get_users') }}">
+        Cancel
+      </a>
+    </div>
+
+  </form>
+</section>
+
+<script>
+  const emailGroup    = document.getElementById('email_group');
+  const passwordGroup = document.getElementById('password_group');
+  const emailInput    = document.getElementById('email');
+  const passwordInput = document.getElementById('password');
+
+  document.querySelectorAll('input[name="invite_mode"]').forEach(function(radio) {
+    radio.addEventListener('change', function() {
+      if (this.value === 'email') {
+        emailGroup.style.display    = '';
+        passwordGroup.style.display = 'none';
+        emailInput.required         = true;
+        passwordInput.required      = false;
+      } else {
+        emailGroup.style.display    = 'none';
+        passwordGroup.style.display = '';
+        emailInput.required         = false;
+        passwordInput.required      = true;
+      }
+    });
+  });
+
+  // Set initial required state to match the default selection (email)
+  emailInput.required    = true;
+  passwordInput.required = false;
+</script>
+{% endblock %}

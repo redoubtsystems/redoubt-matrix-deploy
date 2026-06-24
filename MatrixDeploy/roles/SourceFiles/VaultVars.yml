@@ -1,0 +1,4 @@
+ansible_become_password: ""
+smtp_password: ""
+billing_callback_url: ""     # e.g. https://api.redoubt.systems (base URL only — playbook appends /tenants/{id}/provisioned)
+billing_callback_secret: "" # Bearer token the Billing Service validates on the webhook

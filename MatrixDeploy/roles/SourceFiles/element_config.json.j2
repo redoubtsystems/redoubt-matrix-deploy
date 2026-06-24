@@ -1,0 +1,44 @@
+{
+    "default_server_config": {
+        "m.homeserver": {
+            "base_url": "https://{{ _serving_domain }}",
+            "server_name": "{{ _serving_domain }}"
+        }
+    },
+    "disable_custom_urls": true,
+    "disable_guests": true,
+    "brand": "Redoubt Systems",
+    "branding": {
+        "auth_header_logo_url": "themes/redoubt/logo.svg",
+        "auth_footer_links": [
+            {
+                "text": "Privacy Policy",
+                "url": "https://redoubt.systems/privacy"
+            }
+        ]
+    },
+    "default_theme": "dark",
+    "setting_defaults": {
+        "breadcrumbs": true,
+        "UIFeature.registration": false,
+        "UIFeature.passwordReset": true,
+        "UIFeature.feedback": false
+    },
+    "room_directory": {
+        "servers": []
+    },
+    "show_labs_settings": false,
+    "default_federate": false
+{%- if 'teleconferencing' in (item.addons | default([])) %},
+    "features": {
+        "feature_video_rooms": true,
+        "feature_group_calls": true,
+        "feature_element_call_video_rooms": true
+    },
+    "element_call": {
+        "url": "https://call.element.io",
+        "use_exclusively": true,
+        "brand": "Redoubt Calls"
+    }
+{%- endif %}
+}

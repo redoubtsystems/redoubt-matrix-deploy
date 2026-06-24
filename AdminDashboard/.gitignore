@@ -1,0 +1,5 @@
+.env
+.flask_secret
+static/css/
+__pycache__/
+*.pyc

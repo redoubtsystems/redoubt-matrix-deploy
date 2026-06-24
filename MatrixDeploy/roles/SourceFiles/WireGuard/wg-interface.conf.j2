@@ -1,0 +1,15 @@
+# WireGuard interface configuration for tenant {{ item.id }}
+# Interface: wg{{ item.id }}
+# Managed by Ansible — do not edit manually.
+# Redeploy via: ansible-playbook addTenant.yml (re-provision is safe; keys are preserved)
+
+[Interface]
+Address    = {{ wireguard_server_ip }}/24
+ListenPort = {{ item.wireguard_port }}
+PrivateKey = {{ wg_private_key }}
+
+# Admin client — first peer, generated at provision time.
+# Additional peers start at .3 within {{ wireguard_subnet }}.
+[Peer]
+PublicKey  = {{ wg_client_public_key }}
+AllowedIPs = {{ wg_client_ip }}/32

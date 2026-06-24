@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+
+{% block title %}Room: {{ room.name or room_localpart }}{% endblock %}
+
+{% block content %}
+<section class="panel">
+
+  <header class="page-header">
+    <h1>{{ room.name or room.canonical_alias or room.room_id }}</h1>
+    <a href="{{ url_for('get_rooms') }}" class="btn secondary">Back to Rooms</a>
+  </header>
+
+  <table class="detail-table">
+    <tbody>
+      <tr>
+        <th>Room ID</th>
+        <td><code>{{ room.room_id }}</code></td>
+      </tr>
+      {% if room.canonical_alias %}
+      <tr>
+        <th>Alias</th>
+        <td>{{ room.canonical_alias }}</td>
+      </tr>
+      {% endif %}
+      {% if room.topic %}
+      <tr>
+        <th>Topic</th>
+        <td>{{ room.topic }}</td>
+      </tr>
+      {% endif %}
+      <tr>
+        <th>Visibility</th>
+        <td>
+          {% if room.public %}
+            <span class="badge user">Public</span>
+          {% else %}
+            <span class="badge admin">Private</span>
+          {% endif %}
+        </td>
+      </tr>
+      <tr>
+        <th>Members</th>
+        <td>{{ room.joined_members }}</td>
+      </tr>
+      {% if room.creator %}
+      <tr>
+        <th>Created by</th>
+        <td>{{ room.creator }}</td>
+      </tr>
+      {% endif %}
+    </tbody>
+  </table>
+
+  <h2 class="section-heading">Members</h2>
+
+  {% if members %}
+  <table class="users-table">
+    <thead>
+      <tr>
+        <th>User</th>
+        <th>Action</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for member in members %}
+      <tr>
+        <td class="mxid">{{ member }}</td>
+        <td>
+          <form
+            method="post"
+            action="{{ url_for('room_remove_user', room_localpart=room_localpart) }}"
+            class="inline-form"
+          >
+            <input type="hidden" name="user_id" value="{{ member }}" />
+            <button
+              type="submit"
+              class="btn danger"
+              onclick="return confirm('Remove {{ member }} from this room?')"
+            >
+              Remove
+            </button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p class="muted">No members.</p>
+  {% endif %}
+
+  <h2 class="section-heading">Add User to Room</h2>
+  <form
+    method="post"
+    action="{{ url_for('room_invite', room_localpart=room_localpart) }}"
+    class="form"
+  >
+    <div class="form-group">
+      <label for="username">Username</label>
+      <input
+        type="text"
+        id="username"
+        name="username"
+        placeholder="alice"
+        required
+      />
+    </div>
+    <div class="actions">
+      <button type="submit" class="btn secondary">Add to Room</button>
+    </div>
+  </form>
+
+  <h2 class="section-heading">Danger Zone</h2>
+  <p class="muted">Permanently delete this room and all its history. This cannot be undone.</p>
+  <form
+    method="post"
+    action="{{ url_for('delete_room', room_localpart=room_localpart) }}"
+  >
+    <button
+      type="submit"
+      class="btn danger"
+      onclick="return confirm('Permanently delete this room and all its messages? This cannot be undone.')"
+    >
+      Delete Room
+    </button>
+  </form>
+
+</section>
+{% endblock %}

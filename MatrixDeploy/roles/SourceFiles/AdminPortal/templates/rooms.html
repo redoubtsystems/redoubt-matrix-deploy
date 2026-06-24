@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+
+{% block title %}Rooms{% endblock %}
+
+{% block content %}
+<section class="panel">
+  <header class="page-header">
+    <div>
+      <h2>Rooms</h2>
+      {% if total %}
+        <p class="muted">{{ total }} room{{ 's' if total != 1 }}</p>
+      {% endif %}
+    </div>
+    <a href="{{ url_for('new_room_form') }}" class="btn primary">Create Room</a>
+  </header>
+
+  {% if rooms %}
+  <table class="users-table">
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Members</th>
+        <th>Visibility</th>
+        <th>Creator</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for room in rooms %}
+      <tr>
+        <td>
+          <a href="{{ url_for('get_room', room_localpart=room.localpart) }}" class="row-link">
+            {{ room.name or room.canonical_alias or room.room_id }}
+          </a>
+          {% if room.canonical_alias %}
+            <br><span class="muted" style="font-size:0.8rem">{{ room.canonical_alias }}</span>
+          {% endif %}
+        </td>
+        <td>{{ room.joined_members }}</td>
+        <td>
+          {% if room.public %}
+            <span class="badge user">Public</span>
+          {% else %}
+            <span class="badge admin">Private</span>
+          {% endif %}
+        </td>
+        <td class="muted">
+          {% if room.creator %}
+            {{ room.creator.split(':')[0][1:] }}
+          {% else %}
+            —
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p class="muted">No rooms found on this homeserver.</p>
+  {% endif %}
+</section>
+{% endblock %}

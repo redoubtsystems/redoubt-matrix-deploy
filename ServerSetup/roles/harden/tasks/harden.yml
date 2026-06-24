@@ -1,0 +1,104 @@
+# --- 1. Secure Login
+- name: Disable root SSH login
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^PermitRootLogin'
+    line: 'PermitRootLogin no'
+    state: present
+    backup: yes
+
+- name: Disable password authentication
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^PasswordAuthentication'
+    line: 'PasswordAuthentication no'
+    state: present
+    backup: yes
+
+- name: Restart SSH
+  ansible.builtin.service:
+    name: ssh
+    state: restarted
+
+# --- 2. Install and configure UFW ---
+- name: Install UFW
+  ansible.builtin.apt:
+    name: ufw
+    state: present
+
+- name: Deny all incoming connections by default
+  ufw:
+    state: enabled
+    policy: deny
+    direction: incoming
+
+- name: Allow all outgoing connections
+  ufw:
+    state: enabled
+    policy: allow
+    direction: outgoing
+
+- name: Allow required ports
+  ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+  with_items:
+    - '{{ ssh_port }}'
+    - '80'
+    - '443'
+
+# --- 3. Install Fail2Ban ---
+- name: Install Fail2Ban
+  ansible.builtin.apt:
+    name: fail2ban
+    state: present
+
+- name: Enable Fail2Ban
+  ansible.builtin.service:
+    name: fail2ban
+    state: started
+    enabled: yes
+
+# --- 4. Enable unattended upgrades ---
+- name: Install unattended-upgrades
+  ansible.builtin.apt:
+    name: unattended-upgrades
+    state: present
+
+- name: Ensure unattended-upgrades is running
+  ansible.builtin.service:
+    name: unattended-upgrades
+    state: started
+    enabled: yes      
+
+- name: Unattend-Upgrades File1
+  ansible.builtin.lineinfile:
+    path: /etc/apt/apt.conf.d/20auto-upgrades
+    line: '{{ item }}'
+    create: yes
+  loop:
+    - 'APT::Periodic::Update-Package-Lists "1";'
+    - 'APT::Periodic::Unattended-Upgrade "1";'
+
+- name: Unattend-Upgrades File2
+  template:
+    src: ../../SourceFiles/50unattended-upgrades
+    dest: /etc/apt/apt.conf.d/50unattended-upgrades
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Restart Unattend-Upgrades
+  ansible.builtin.systemd:
+    name: unattended-upgrades
+    state: restarted
+
+# --- 5. Disable unused services ---
+- name: List Enabled services
+  ansible.builtin.command: systemctl list-unit-files --state=enabled
+  register: enabled_services
+
+- name:  Debug enabled services
+  ansible.builtin.debug:
+    var: enabled_services.stdout_lines

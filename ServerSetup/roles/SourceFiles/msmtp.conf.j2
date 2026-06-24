@@ -1,0 +1,15 @@
+# Global msmtp config for MailTrap
+defaults
+auth on
+tls on
+tls_trust_file /etc/ssl/certs/ca-certificates.crt
+logfile ~/.msmtp.log
+
+account mailtrap
+host {{ smtp_server }}
+port {{ smtp_port }}
+from {{ smtp_from_address | regex_search('[^<\\s]+@[^>\\s]+') }}
+user {{ smtp_username }}
+password {{ smtp_password }}
+
+account default : mailtrap

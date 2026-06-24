@@ -1,0 +1,39 @@
+# --- Tor Base ---
+# Sets up a single Tor daemon on the host with a drop-in include pattern.
+# Matrix Deploy adds per-tenant hidden service snippets to /etc/tor/torrc.d/
+# and creates per-tenant subdirectories under /var/lib/tor/hidden_services/.
+# No UFW rules needed — Tor uses outbound connections only.
+
+- name: Install tor
+  ansible.builtin.apt:
+    name: tor
+    state: present
+    update_cache: true
+
+- name: Create torrc drop-in directory
+  ansible.builtin.file:
+    path: /etc/tor/torrc.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Enable torrc.d include pattern in /etc/tor/torrc
+  ansible.builtin.lineinfile:
+    path: /etc/tor/torrc
+    line: '%include /etc/tor/torrc.d/*.conf'
+    state: present
+
+- name: Create hidden services base directory
+  ansible.builtin.file:
+    path: /var/lib/tor/hidden_services
+    state: directory
+    owner: debian-tor
+    group: debian-tor
+    mode: '0700'
+
+- name: Start and enable tor service
+  ansible.builtin.service:
+    name: tor
+    state: started
+    enabled: true

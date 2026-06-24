@@ -1,0 +1,27 @@
+- name: Disable Matrix Tenant
+  hosts: currentHosts
+  become: true
+
+  vars:
+    tenants:
+      - id:             "{{ id }}"
+        fulldomain:     "{{ fulldomain }}"
+        network_addon:  "{{ network_addon | default('') }}"
+        addons:         "{{ addons | default([]) }}"
+        wireguard_port: "{{ wireguard_port | default(omit) }}"
+        livekit_tls_port:   "{{ livekit_tls_port | default(omit) }}"
+        livekit_media_port: "{{ livekit_media_port | default(omit) }}"
+        admin_port:     "{{ admin_port }}"
+
+  tasks:
+    - include_tasks: roles/matrix_stack/tasks/disableMatrixInstance.yml
+      loop: "{{ tenants }}"
+      loop_control:
+        loop_var: item
+
+# Usage:
+#   ansible-playbook -i inventory.develop.yml disableTenant.yml --limit ControlServer1 \
+#     --extra-vars '{"id":"1008","fulldomain":"1008.chat.redoubt.systems","admin_port":5008}'
+#
+# Stops containers and disables Nginx vhosts. Data is preserved on disk.
+# Re-provision with addTenant.yml to reactivate.

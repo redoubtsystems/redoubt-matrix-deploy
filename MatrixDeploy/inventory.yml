@@ -1,0 +1,35 @@
+# Shared host and system variables: see /systemVariables.develop.yml at project root
+all:
+  vars:
+    ClientBuildPath: "/opt/redoubt/client-web/"
+    ansible_user: "YOUR_ADMIN_USER"
+    plans:
+      starter:
+        max_users: 15
+        max_memory: 450
+        max_vcpu: 0.25
+        overcommit: 1.1
+        max_upload_size: "10M"
+        max_storage_mb: 2048
+        remote_media_lifetime: "30d"
+      community:
+        max_users: 40
+        max_memory: 900
+        max_vcpu: 0.5
+        overcommit: 1.1
+        max_upload_size: "25M"
+        max_storage_mb: 10240
+        remote_media_lifetime: "90d"
+      org:
+        max_users: 150
+        max_memory: 2048
+        max_vcpu: 1.0
+        overcommit: 1.05
+        max_upload_size: "50M"
+        max_storage_mb: 51200
+        remote_media_lifetime: "180d"
+
+currentHosts:
+  hosts:
+    your-server-hostname:
+      ansible_host: YOUR_SERVER_IP

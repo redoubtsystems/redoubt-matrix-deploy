@@ -1,0 +1,34 @@
+# Redirect vhost for {{ _redirect_from }} → {{ item.fulldomain }}
+# Deployed when a tenant's custom domain is active and the original
+# subdomain needs to redirect.  Preserves the old LE cert so the
+# redirect itself serves over HTTPS without browser warnings.
+#
+# Managed by Ansible — do not edit manually.
+
+server {
+  listen 80;
+  server_name {{ _redirect_from }};
+
+  location /.well-known/acme-challenge/ {
+    root /var/www/html;
+  }
+
+  location / {
+    return 301 https://{{ item.fulldomain }}$request_uri;
+  }
+}
+
+{% if _redirect_tls_cert_exists | default(false) %}
+server {
+  listen 443 ssl http2;
+  server_name {{ _redirect_from }};
+
+  ssl_certificate /etc/letsencrypt/live/{{ _redirect_from }}/fullchain.pem;
+  ssl_certificate_key /etc/letsencrypt/live/{{ _redirect_from }}/privkey.pem;
+  ssl_protocols TLSv1.2 TLSv1.3;
+
+  location / {
+    return 301 https://{{ item.fulldomain }}$request_uri;
+  }
+}
+{% endif %}

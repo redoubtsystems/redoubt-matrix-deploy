@@ -1,0 +1,130 @@
+# roles/matrix_stack/tasks/addons/teleconferencing.yml
+#
+# Provisions LiveKit SFU + lk-jwt-service for MatrixRTC group calls.
+# Runs AFTER the core Matrix stack is already up (called from addMatrixInstance.yml).
+#
+# Services added:
+#   {id}_livekit    — LiveKit SFU (WebRTC media routing)
+#   {id}_lk_jwt     — lk-jwt-service (bridges Matrix auth to LiveKit JWTs)
+#
+# Managed as a separate Docker Compose project ({id}_teleconf) alongside the core stack.
+# lk-jwt-service joins {id}_matrix_net to reach Synapse for OpenID token validation.
+#
+# Port mapping:
+#   livekit_api_port   → LiveKit HTTP/WS API (localhost, Nginx proxied at /livekit/sfu/)
+#   livekit_jwt_port   → lk-jwt-service (localhost, Nginx proxied at /livekit/jwt)
+#   livekit_tls_port   → LiveKit WebRTC TCP fallback (internet-facing)
+#   livekit_media_port → LiveKit WebRTC UDP media (internet-facing, single port multiplexed)
+
+# --- Directory structure ---
+
+- name: "[Teleconf] Create teleconf base directory for {{ item.id }}"
+  file:
+    path: "/srv/matrix/{{ item.id }}_chat/teleconf"
+    state: directory
+    owner: "{{ admin_user }}"
+    group: "{{ admin_user }}"
+    mode: '0755'
+
+# --- LiveKit API credentials ---
+# Generated once (creates: guard), never rotated on re-run.
+
+- name: "[Teleconf] Generate LiveKit API key for {{ item.id }}"
+  shell: openssl rand -hex 12 > /srv/matrix/{{ item.id }}_chat/teleconf/livekit_api_key
+  args:
+    creates: "/srv/matrix/{{ item.id }}_chat/teleconf/livekit_api_key"
+
+- name: "[Teleconf] Generate LiveKit API secret for {{ item.id }}"
+  shell: openssl rand -hex 32 > /srv/matrix/{{ item.id }}_chat/teleconf/livekit_api_secret
+  args:
+    creates: "/srv/matrix/{{ item.id }}_chat/teleconf/livekit_api_secret"
+
+- name: "[Teleconf] Set permissions on LiveKit credentials for {{ item.id }}"
+  file:
+    path: "/srv/matrix/{{ item.id }}_chat/teleconf/{{ lk_cred }}"
+    owner: "{{ admin_user }}"
+    mode: '0600'
+  loop:
+    - livekit_api_key
+    - livekit_api_secret
+  loop_control:
+    loop_var: lk_cred
+
+- name: "[Teleconf] Read LiveKit API key for {{ item.id }}"
+  slurp:
+    src: "/srv/matrix/{{ item.id }}_chat/teleconf/livekit_api_key"
+  register: lk_api_key_slurp
+
+- name: "[Teleconf] Read LiveKit API secret for {{ item.id }}"
+  slurp:
+    src: "/srv/matrix/{{ item.id }}_chat/teleconf/livekit_api_secret"
+  register: lk_api_secret_slurp
+
+- name: "[Teleconf] Set LiveKit credential facts for {{ item.id }}"
+  set_fact:
+    livekit_api_key: "{{ lk_api_key_slurp.content | b64decode | trim }}"
+    livekit_api_secret: "{{ lk_api_secret_slurp.content | b64decode | trim }}"
+
+# --- Deploy config files ---
+
+- name: "[Teleconf] Deploy LiveKit config for {{ item.id }}"
+  template:
+    src: ../../../SourceFiles/Teleconferencing/livekit.yaml.j2
+    dest: "/srv/matrix/{{ item.id }}_chat/teleconf/livekit.yaml"
+    owner: "{{ admin_user }}"
+    group: "{{ admin_user }}"
+    mode: '0644'
+
+- name: "[Teleconf] Deploy lk-jwt-service env for {{ item.id }}"
+  template:
+    src: ../../../SourceFiles/Teleconferencing/lk-jwt-service.env.j2
+    dest: "/srv/matrix/{{ item.id }}_chat/teleconf/lk-jwt-service.env"
+    owner: "{{ admin_user }}"
+    group: "{{ admin_user }}"
+    mode: '0644'
+
+- name: "[Teleconf] Deploy teleconf Docker Compose for {{ item.id }}"
+  template:
+    src: ../../../SourceFiles/Teleconferencing/compose-teleconf.yml.j2
+    dest: "/srv/matrix/{{ item.id }}_chat/compose-teleconf.yaml"
+    owner: "{{ admin_user }}"
+    group: "{{ admin_user }}"
+    mode: '0644'
+
+# --- Firewall ---
+
+- name: "[Teleconf] Open LiveKit ports via UFW for {{ item.id }}"
+  ufw:
+    rule: allow
+    port: "{{ lk_port.port }}"
+    proto: "{{ lk_port.proto }}"
+  loop:
+    - { port: "{{ item.livekit_tls_port }}", proto: tcp }
+    - { port: "{{ item.livekit_media_port }}", proto: udp }
+  loop_control:
+    loop_var: lk_port
+
+# --- Docker Compose stack ---
+
+- name: "[Teleconf] Start teleconferencing stack for {{ item.id }}"
+  community.docker.docker_compose_v2:
+    project_src: "/srv/matrix/{{ item.id }}_chat"
+    project_name: "{{ item.id }}_teleconf"
+    files:
+      - compose-teleconf.yaml
+    state: present
+    recreate: auto
+    remove_orphans: true
+
+# --- Nginx reload ---
+
+- name: "[Teleconf] Test Nginx configuration after LiveKit proxy for {{ item.id }}"
+  command: nginx -t
+  register: teleconf_nginx_test
+  changed_when: false
+  failed_when: teleconf_nginx_test.rc != 0
+
+- name: "[Teleconf] Reload Nginx"
+  service:
+    name: nginx
+    state: reloaded

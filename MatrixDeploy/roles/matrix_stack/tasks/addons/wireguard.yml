@@ -1,0 +1,176 @@
+# roles/matrix_stack/tasks/addons/wireguard.yml
+#
+# Provisions a per-tenant WireGuard interface on the VPS host.
+# Interface name: wg{{ item.id }}  (e.g. wg3021)
+# Listen port:    {{ item.wireguard_port }} (UDP)
+#
+# Subnet and server IP are derived from wireguard_port:
+#   octet               = wireguard_port - 51800
+#   wireguard_subnet    = 10.100.<octet>.0/24
+#   wireguard_server_ip = 10.100.<octet>.1
+# This keeps the Billing Service contract to a single port allocation.
+# Valid range: wireguard_port 51801–52055 (octets 1–255).
+#
+# Self-contained: installs wireguard-tools if not already present.
+# IP forwarding is NOT enabled here — base_env handles sysctl if peer routing is needed.
+#
+# After provisioning, the initial admin client keypair and config are passed
+# back to the Billing Service via facts so the welcome email can include a
+# ready-to-import .conf file.  Additional peers are managed outside this playbook.
+
+# ── Install wireguard-tools if needed ─────────────────────────────────────────
+
+- name: "[WireGuard] Ensure wireguard-tools is installed for {{ item.id }}"
+  package:
+    name: wireguard-tools
+    state: present
+
+# ── Derive subnet from wireguard_port ─────────────────────────────────────────
+
+- name: "[WireGuard] Compute subnet from wireguard_port for {{ item.id }}"
+  set_fact:
+    _wg_octet: "{{ (item.wireguard_port | int) - 51800 }}"
+
+- name: "[WireGuard] Validate WireGuard port range for {{ item.id }}"
+  assert:
+    that:
+      - (_wg_octet | int) >= 1
+      - (_wg_octet | int) <= 255
+    fail_msg: >-
+      wireguard_port {{ item.wireguard_port }} is out of range.
+      Must be 51801–52055 (maps to subnet octet 1–255).
+
+- name: "[WireGuard] Set derived network facts for {{ item.id }}"
+  set_fact:
+    wireguard_subnet: "10.100.{{ _wg_octet }}.0/24"
+    wireguard_server_ip: "10.100.{{ _wg_octet }}.1"
+
+# ── Key generation ────────────────────────────────────────────────────────────
+
+- name: "[WireGuard] Ensure /etc/wireguard exists for {{ item.id }}"
+  file:
+    path: /etc/wireguard
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: "[WireGuard] Generate server private key for {{ item.id }}"
+  shell: wg genkey > /etc/wireguard/wg{{ item.id }}.key
+  args:
+    creates: "/etc/wireguard/wg{{ item.id }}.key"
+
+- name: "[WireGuard] Set permissions on private key for {{ item.id }}"
+  file:
+    path: "/etc/wireguard/wg{{ item.id }}.key"
+    owner: root
+    group: root
+    mode: '0600'
+
+- name: "[WireGuard] Derive server public key for {{ item.id }}"
+  shell: wg pubkey < /etc/wireguard/wg{{ item.id }}.key > /etc/wireguard/wg{{ item.id }}.pub
+  args:
+    creates: "/etc/wireguard/wg{{ item.id }}.pub"
+
+- name: "[WireGuard] Set permissions on public key for {{ item.id }}"
+  file:
+    path: "/etc/wireguard/wg{{ item.id }}.pub"
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: "[WireGuard] Read private key for {{ item.id }}"
+  slurp:
+    src: "/etc/wireguard/wg{{ item.id }}.key"
+  register: wg_private_key_slurp
+
+- name: "[WireGuard] Read public key for {{ item.id }}"
+  slurp:
+    src: "/etc/wireguard/wg{{ item.id }}.pub"
+  register: wg_public_key_slurp
+
+- name: "[WireGuard] Set key facts for {{ item.id }}"
+  set_fact:
+    wg_private_key: "{{ wg_private_key_slurp.content | b64decode | trim }}"
+    wg_public_key: "{{ wg_public_key_slurp.content | b64decode | trim }}"
+
+# ── Admin client keypair ──────────────────────────────────────────────────────
+# Generate once alongside the server keys.  The admin client gets the first
+# usable IP in the subnet (.2).
+
+- name: "[WireGuard] Generate admin client private key for {{ item.id }}"
+  shell: wg genkey > /etc/wireguard/wg{{ item.id }}_client.key
+  args:
+    creates: "/etc/wireguard/wg{{ item.id }}_client.key"
+
+- name: "[WireGuard] Set permissions on client private key for {{ item.id }}"
+  file:
+    path: "/etc/wireguard/wg{{ item.id }}_client.key"
+    owner: root
+    group: root
+    mode: '0600'
+
+- name: "[WireGuard] Derive admin client public key for {{ item.id }}"
+  shell: wg pubkey < /etc/wireguard/wg{{ item.id }}_client.key > /etc/wireguard/wg{{ item.id }}_client.pub
+  args:
+    creates: "/etc/wireguard/wg{{ item.id }}_client.pub"
+
+- name: "[WireGuard] Read client private key for {{ item.id }}"
+  slurp:
+    src: "/etc/wireguard/wg{{ item.id }}_client.key"
+  register: wg_client_private_key_slurp
+
+- name: "[WireGuard] Read client public key for {{ item.id }}"
+  slurp:
+    src: "/etc/wireguard/wg{{ item.id }}_client.pub"
+  register: wg_client_public_key_slurp
+
+- name: "[WireGuard] Set client key facts for {{ item.id }}"
+  set_fact:
+    wg_client_private_key: "{{ wg_client_private_key_slurp.content | b64decode | trim }}"
+    wg_client_public_key: "{{ wg_client_public_key_slurp.content | b64decode | trim }}"
+    wg_client_ip: "10.100.{{ _wg_octet }}.2"
+
+# ── Deploy server config (with admin peer) ───────────────────────────────────
+
+- name: "[WireGuard] Deploy interface config for {{ item.id }}"
+  template:
+    src: ../../../SourceFiles/WireGuard/wg-interface.conf.j2
+    dest: "/etc/wireguard/wg{{ item.id }}.conf"
+    owner: root
+    group: root
+    mode: '0600'
+
+- name: "[WireGuard] Enable and start wg-quick@wg{{ item.id }}"
+  systemd:
+    name: "wg-quick@wg{{ item.id }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: "[WireGuard] Open WireGuard UDP port {{ item.wireguard_port }} via UFW for {{ item.id }}"
+  ufw:
+    rule: allow
+    port: "{{ item.wireguard_port }}"
+    proto: udp
+
+# ── Expose client config facts for billing callback ─────────────────────────
+
+- name: "[WireGuard] Set client config facts for billing callback for {{ item.id }}"
+  set_fact:
+    wg_client_config:
+      client_ip: "{{ wg_client_ip }}"
+      client_private_key: "{{ wg_client_private_key }}"
+      server_public_key: "{{ wg_public_key }}"
+      endpoint: "{{ ansible_host }}:{{ item.wireguard_port }}"
+      subnet: "{{ wireguard_subnet }}"
+
+- name: "[WireGuard] Report server public key for {{ item.id }}"
+  debug:
+    msg: |
+      WireGuard interface wg{{ item.id }} is up.
+      Subnet:       {{ wireguard_subnet }}
+      Server IP:    {{ wireguard_server_ip }}
+      Client IP:    {{ wg_client_ip }}
+      Listen port:  {{ item.wireguard_port }}/UDP
+      Server public key: {{ wg_public_key }}
