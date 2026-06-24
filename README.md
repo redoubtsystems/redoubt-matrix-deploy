@@ -142,4 +142,6 @@ layer is not included here.
 
 ## License
 
-[Add license here]
+[GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0)
+
+Copyright (C) 2026 Redoubt Systems
