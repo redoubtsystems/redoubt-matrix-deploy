@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# Checks Redoubt tenant containers for unhealthy/exited/dead state.
+# Sends one consolidated email via msmtp listing all currently-unhealthy containers.
+# Add container names to /opt/redoubt/container-check-exclusions to suppress alerts.
+# Cron: */5 * * * * root /opt/redoubt/check-containers.sh
+
+ALERT_TO="{{ redoubt_email }}"
+
+{% raw %}
+HOSTNAME=$(hostname -f)
+EXCLUSIONS_FILE="/opt/redoubt/container-check-exclusions"
+GRACE_SECONDS=600  # 10 minutes — skip containers started very recently
+
+declare -A EXCLUDED
+if [[ -f "$EXCLUSIONS_FILE" ]]; then
+    while IFS= read -r line; do
+        [[ "$line" =~ ^[[:space:]]*# || -z "${line// }" ]] && continue
+        EXCLUDED["$line"]=1
+    done < "$EXCLUSIONS_FILE"
+fi
+
+NOW=$(date +%s)
+UNHEALTHY_LIST=()
+
+while IFS= read -r name; do
+    [[ -z "$name" ]] && continue
+    [[ "${EXCLUDED[$name]+_}" ]] && continue
+
+    read -r health_status state_status started_at < <(
+        docker inspect --format='{{ .State.Health.Status }} {{ .State.Status }} {{ .State.StartedAt }}' "$name" 2>/dev/null
+    )
+    [[ -z "$state_status" ]] && continue
+
+    # Respect grace period after start/restart
+    if [[ -n "$started_at" && "$started_at" != "<nil>" ]]; then
+        started_epoch=$(date -d "$started_at" +%s 2>/dev/null)
+        if [[ -n "$started_epoch" && $(( NOW - started_epoch )) -lt $GRACE_SECONDS ]]; then
+            continue
+        fi
+    fi
+
+    if [[ "$health_status" == "unhealthy" || "$state_status" == "exited" || "$state_status" == "dead" ]]; then
+        UNHEALTHY_LIST+=("$name (health=$health_status, state=$state_status)")
+    fi
+
+done < <(docker ps -a --format '{{ .Names }}' \
+    | grep -E '_(synapse|postgres|client|admin_portal|livekit|lk_jwt)$')
+
+if [[ ${#UNHEALTHY_LIST[@]} -gt 0 ]]; then
+    BODY="The following containers are unhealthy on ${HOSTNAME}:"$'\n\n'
+    for entry in "${UNHEALTHY_LIST[@]}"; do
+        BODY+="  - $entry"$'\n'
+    done
+    BODY+=$'\n'"Run 'docker logs <container_name>' to investigate."$'\n'
+    BODY+="To suppress, add the container name to ${EXCLUSIONS_FILE}."
+
+    printf "Subject: [Alert] Unhealthy containers on %s\nTo: %s\n\n%s\n" \
+        "$HOSTNAME" "$ALERT_TO" "$BODY" | msmtp "$ALERT_TO"
+fi
+{% endraw %}

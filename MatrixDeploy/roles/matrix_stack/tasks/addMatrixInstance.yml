@@ -1071,3 +1071,64 @@
     - billing_callback_result is failed
       or (billing_callback_result.status is defined
           and billing_callback_result.status not in [200, 201, 202, 204])
+
+# ── Monitoring scripts ────────────────────────────────────────────────────────
+# /opt/redoubt exists on the control server (created by deploy.yml) but must
+# be created explicitly on tenant servers.
+# Deployed idempotently on every provision run so re-provisioning any active
+# tenant also ensures these are present and up-to-date on the server.
+
+- name: Create /opt/redoubt directory
+  file:
+    path: /opt/redoubt
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Deploy container health check script
+  template:
+    src: ../../SourceFiles/check-containers.sh.j2
+    dest: /opt/redoubt/check-containers.sh
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Deploy disk usage check script
+  template:
+    src: ../../SourceFiles/check-disk.sh.j2
+    dest: /opt/redoubt/check-disk.sh
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Deploy container check exclusions file (if absent)
+  copy:
+    dest: /opt/redoubt/container-check-exclusions
+    content: |
+      # Add container names here (one per line) to suppress health alerts.
+      # Example: 1001_synapse
+    owner: root
+    group: root
+    mode: '0644'
+    force: false
+
+- name: Deploy container health check cron job
+  copy:
+    dest: /etc/cron.d/redoubt-container-check
+    content: |
+      # Check Redoubt tenant container health every 5 minutes
+      */5 * * * * root /opt/redoubt/check-containers.sh
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Deploy disk usage check cron job
+  copy:
+    dest: /etc/cron.d/redoubt-disk-check
+    content: |
+      # Check Redoubt tenant and host disk usage hourly
+      0 * * * * root /opt/redoubt/check-disk.sh
+    owner: root
+    group: root
+    mode: '0644'

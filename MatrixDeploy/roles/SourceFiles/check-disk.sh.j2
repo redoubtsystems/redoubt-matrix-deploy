@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# Checks disk usage for tenant data mounts and the host /srv/matrix partition.
+#
+# Per-tenant: alerts once when usage first crosses 90% (state-tracked, no repeats).
+# Host partition (/srv/matrix):
+#   - alerts every run while above 75%
+#   - alerts if usage grew >10 percentage points in the last 24 hours
+#
+# Cron: 0 * * * * root /opt/redoubt/check-disk.sh
+
+ALERT_TO="{{ redoubt_email }}"
+
+{% raw %}
+HOSTNAME=$(hostname -f)
+STATE_FILE="/var/run/redoubt-disk-check.last"
+TENANT_ALERT_THRESHOLD=90
+HOST_ALERT_THRESHOLD=75
+RATE_THRESHOLD=10      # percentage points per 24 hours
+RATE_WINDOW=86400      # 24 hours in seconds
+
+NOW=$(date +%s)
+
+# Load state file (one "key=value" per line)
+declare -A STATE
+if [[ -f "$STATE_FILE" ]]; then
+    while IFS='=' read -r key val; do
+        STATE["$key"]="$val"
+    done < "$STATE_FILE"
+fi
+
+NEW_STATE=()
+
+send_alert() {
+    local subject="$1"
+    local body="$2"
+    printf "Subject: %s\nTo: %s\n\n%s\n" "$subject" "$ALERT_TO" "$body" | msmtp "$ALERT_TO"
+}
+
+# ── Per-tenant data mounts ────────────────────────────────────────────────────
+
+for mount_point in /srv/matrix/*_chat/data; do
+    [[ -d "$mount_point" ]] || continue
+    tenant_id=$(basename "$(dirname "$mount_point")" | sed 's/_chat$//')
+
+    pct=$(df --output=pcent "$mount_point" 2>/dev/null | tail -1 | tr -dc '0-9')
+    [[ -z "$pct" ]] && continue
+
+    state_key="tenant_alerted_${tenant_id}"
+    already_alerted="${STATE[$state_key]:-0}"
+    NEW_STATE+=("${state_key}=${already_alerted}")
+
+    if [[ "$pct" -ge $TENANT_ALERT_THRESHOLD && "$already_alerted" -eq 0 ]]; then
+        send_alert \
+            "[Alert] Tenant disk near full on ${HOSTNAME} — tenant ${tenant_id} at ${pct}%" \
+            "Tenant ${tenant_id} data mount is ${pct}% full on ${HOSTNAME}."$'\n\n'"Path: ${mount_point}"$'\n'"Action: notify customer to clean up or upgrade storage."
+        last_idx=$(( ${#NEW_STATE[@]} - 1 ))
+        NEW_STATE[$last_idx]="${state_key}=1"
+    elif [[ "$pct" -lt $TENANT_ALERT_THRESHOLD && "$already_alerted" -eq 1 ]]; then
+        last_idx=$(( ${#NEW_STATE[@]} - 1 ))
+        NEW_STATE[$last_idx]="${state_key}=0"
+    fi
+done
+
+# ── Host partition (/srv/matrix) ──────────────────────────────────────────────
+
+host_pct=$(df --output=pcent /srv/matrix 2>/dev/null | tail -1 | tr -dc '0-9')
+
+if [[ -n "$host_pct" ]]; then
+    # Absolute threshold — alert every run while over limit
+    if [[ "$host_pct" -ge $HOST_ALERT_THRESHOLD ]]; then
+        send_alert \
+            "[Alert] Host disk high on ${HOSTNAME} — /srv/matrix at ${host_pct}%" \
+            "/srv/matrix on ${HOSTNAME} is ${host_pct}% full."$'\n\n'"Action: add capacity or remove old tenants."
+    fi
+
+    # Rate-of-change check — compare to reading from ~24 hours ago
+    prev_pct="${STATE[host_pct]:-}"
+    prev_ts="${STATE[host_ts]:-0}"
+
+    if [[ -n "$prev_pct" && $(( NOW - prev_ts )) -ge $RATE_WINDOW ]]; then
+        delta=$(( host_pct - prev_pct ))
+        if [[ "$delta" -ge $RATE_THRESHOLD ]]; then
+            send_alert \
+                "[Alert] Host disk growing fast on ${HOSTNAME} — /srv/matrix grew ${delta}% in 24h" \
+                "/srv/matrix on ${HOSTNAME} grew ${delta} percentage points in the last 24 hours."$'\n\n'"Previous: ${prev_pct}%  Current: ${host_pct}%"$'\n'"This may indicate runaway tenant data growth."
+        fi
+        # Reset baseline after comparison
+        NEW_STATE+=("host_pct=${host_pct}")
+        NEW_STATE+=("host_ts=${NOW}")
+    elif [[ -z "$prev_pct" ]]; then
+        # First run — establish baseline
+        NEW_STATE+=("host_pct=${host_pct}")
+        NEW_STATE+=("host_ts=${NOW}")
+    else
+        # Within 24h window — preserve old baseline
+        NEW_STATE+=("host_pct=${prev_pct}")
+        NEW_STATE+=("host_ts=${prev_ts}")
+    fi
+fi
+
+# ── Write updated state ───────────────────────────────────────────────────────
+
+printf '%s\n' "${NEW_STATE[@]}" > "$STATE_FILE"
+{% endraw %}
