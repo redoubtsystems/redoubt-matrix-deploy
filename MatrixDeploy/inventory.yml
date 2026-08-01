@@ -9,7 +9,6 @@ all:
         max_memory: 450
         max_vcpu: 0.25
         overcommit: 1.1
-        max_upload_size: "10M"
         max_storage_mb: 2048
         remote_media_lifetime: "30d"
       community:
@@ -17,7 +16,6 @@ all:
         max_memory: 900
         max_vcpu: 0.5
         overcommit: 1.1
-        max_upload_size: "25M"
         max_storage_mb: 10240
         remote_media_lifetime: "90d"
       org:
@@ -25,7 +23,6 @@ all:
         max_memory: 2048
         max_vcpu: 1.0
         overcommit: 1.05
-        max_upload_size: "50M"
         max_storage_mb: 51200
         remote_media_lifetime: "180d"
 

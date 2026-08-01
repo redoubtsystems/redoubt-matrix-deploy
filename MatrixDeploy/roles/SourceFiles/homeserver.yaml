@@ -44,7 +44,9 @@ database:
     cp_max: 10
 log_config: /config/log.config
 media_store_path: /data/media_store
-max_upload_size: "{{ plans[item.plan_type].max_upload_size }}"
+# Keep individual uploads bounded by the tenant's provisioned storage, not by
+# a separate per-plan attachment cap.
+max_upload_size: "{{ total_storage_mb }}M"
 media_retention:
   remote_media_lifetime: "{{ plans[item.plan_type].remote_media_lifetime }}"
 signing_key_path: "/data/{{ item.id }}.signing.key"
