@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+
+{% block title %}Server Status{% endblock %}
+
+{% block content %}
+<section class="panel">
+
+  <header class="page-header">
+    <h1>Server Status</h1>
+  </header>
+
+  <table class="detail-table">
+    <tbody>
+      <tr>
+        <th>Synapse Version</th>
+        <td>{{ server_version }}</td>
+      </tr>
+      <tr>
+        <th>Active Users</th>
+        <td>
+          {{ active_users }}
+          {% if max_users %} / {{ max_users }}{% endif %}
+        </td>
+      </tr>
+      <tr>
+        <th>Total Rooms</th>
+        <td>{{ total_rooms }}</td>
+      </tr>
+      <tr>
+        <th>Total Media Uploads</th>
+        <td>{{ total_media }}</td>
+      </tr>
+    </tbody>
+  </table>
+
+</section>
+
+<section class="panel">
+
+  <h2 class="section-heading">Media Usage by User</h2>
+
+  {% if media_users %}
+  <table class="users-table">
+    <thead>
+      <tr>
+        <th>User</th>
+        <th>Files</th>
+        <th>Total Size</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for user in media_users %}
+      <tr>
+        <td class="mxid">{{ user.user_id }}</td>
+        <td>{{ user.media_count }}</td>
+        <td>{{ format_bytes(user.media_length) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p class="muted">No media uploads.</p>
+  {% endif %}
+
+</section>
+
+<section class="panel">
+
+  <h2 class="section-heading">Largest Rooms by Database Size</h2>
+
+  {% if db_rooms %}
+  <table class="users-table">
+    <thead>
+      <tr>
+        <th>Room</th>
+        <th>Estimated Size</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for room in db_rooms %}
+      <tr>
+        <td>{{ room.room_name or room.room_id }}</td>
+        <td>{{ format_bytes(room.estimated_size) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p class="muted">No database size data available.</p>
+  {% endif %}
+
+</section>
+{% endblock %}

@@ -21,6 +21,7 @@ RUN npm install -g sass
 # Copy Source Files
 COPY  app.py .
 COPY requirements.txt .
+COPY redoubt_login_email.html .
 COPY static/ static/
 COPY scss/ scss/
 COPY templates/ templates/

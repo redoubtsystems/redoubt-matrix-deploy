@@ -1,10 +1,17 @@
-from flask import Flask, request, render_template, redirect, url_for, flash, session
+from flask import (
+    Flask,
+    flash,
+    redirect,
+    render_template,
+    request,
+    session,
+    url_for,
+)
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_wtf.csrf import CSRFProtect
 from functools import wraps
 import os
-import re
 import secrets
 import smtplib
 import threading
@@ -154,10 +161,10 @@ _PLAN_DISPLAY = {
 # community_complete shares community's base limits; addons (video, custom domain)
 # are reflected separately via the subscription data.
 _PLAN_FEATURES = {
-    "starter":            {"max_users": 15,  "storage_gb": 2,  "max_upload": "10 MB"},
-    "community":          {"max_users": 40,  "storage_gb": 10, "max_upload": "25 MB"},
-    "community_complete": {"max_users": 40,  "storage_gb": 10, "max_upload": "25 MB"},
-    "organization":       {"max_users": 150, "storage_gb": 50, "max_upload": "50 MB"},
+    "starter":            {"max_users": 15,  "storage_gb": 2},
+    "community":          {"max_users": 40,  "storage_gb": 10},
+    "community_complete": {"max_users": 40,  "storage_gb": 10},
+    "organization":       {"max_users": 150, "storage_gb": 50},
 }
 
 
@@ -180,6 +187,37 @@ def _billing_request(method, path, **kwargs):
         return r.json() if r.ok and r.content else None
     except requests.RequestException:
         return None
+
+
+def _subscription_context():
+    data = _billing_request(
+        "GET",
+        f"/internal/tenants/{BILLING_CUSTOMER_ID}/subscription",
+    )
+
+    period_end_display = None
+    if data and data.get("current_period_end"):
+        period_end_display = datetime.fromtimestamp(
+            data["current_period_end"], tz=timezone.utc
+        ).strftime("%B %-d, %Y")
+
+    plan_type = (data or {}).get("plan_type", "")
+    plan_display = _PLAN_DISPLAY.get(plan_type, plan_type)
+    plan_features = _PLAN_FEATURES.get(plan_type)
+
+    extra_storage = (data or {}).get("extra_storage_gb", 0) or 0
+    total_storage_gb = None
+    if plan_features:
+        total_storage_gb = plan_features["storage_gb"] + extra_storage
+
+    return {
+        "sub": data,
+        "plan_display": plan_display,
+        "plan_features": plan_features,
+        "period_end_display": period_end_display,
+        "billing_configured": bool(BILLING_SERVICE_URL and BILLING_CUSTOMER_ID),
+        "total_storage_gb": total_storage_gb,
+    }
 
 
 def _room_id(localpart):
@@ -307,14 +345,14 @@ def internal_error(e):
 ## Auth routes
 @app.route("/")
 def index():
-    return redirect(url_for("get_users"))
+    return redirect(url_for("dashboard"))
 
 
 @app.route("/login", methods=["GET", "POST"])
 @limiter.limit("5 per minute")
 def login():
     if "access_token" in session:
-        return redirect(url_for("get_users"))
+        return redirect(url_for("dashboard"))
 
     if request.method == "POST":
         username = request.form.get("username", "").strip()
@@ -363,7 +401,7 @@ def login():
 
         session["access_token"] = token
         session["user_id"] = data.get("user_id", user_id)
-        return redirect(url_for("get_users"))
+        return redirect(url_for("dashboard"))
 
     return render_template("login.html")
 
@@ -382,6 +420,75 @@ def logout():
     session.clear()
     flash("You have been signed out.", "info")
     return redirect(url_for("login"))
+
+
+## Dashboard route
+@app.route("/dashboard", methods=["GET"])
+@login_required
+def dashboard():
+    version_data = synapse_request("GET", f"{ADMIN_V1}server_version")
+    users_data = synapse_request(
+        "GET",
+        f"{ADMIN_V2}users",
+        params={"limit": 1000},
+    )
+    rooms_data = synapse_request(
+        "GET",
+        f"{ADMIN_V1}rooms",
+        params={"limit": 1000, "order_by": "joined_members", "dir": "b"},
+    )
+    media_data = synapse_request(
+        "GET",
+        f"{ADMIN_V1}statistics/users/media",
+        params={"limit": 100, "order_by": "media_length", "dir": "b"},
+    )
+
+    users = users_data.get("users", [])
+    total_users = users_data.get("total", len(users))
+    active_users = _active_user_count()
+    deactivated_users = max(total_users - active_users, 0)
+    admin_users = sum(
+        1
+        for user in users
+        if user.get("admin") and not user.get("deactivated")
+    )
+
+    rooms = rooms_data.get("rooms", [])
+    for room in rooms:
+        rid = room.get("room_id", "")
+        room["localpart"] = rid.lstrip("!").split(":")[0] if rid else ""
+
+    total_rooms = rooms_data.get("total_rooms", len(rooms))
+    public_rooms = sum(1 for room in rooms if room.get("public"))
+    private_rooms = max(total_rooms - public_rooms, 0)
+    named_rooms = sum(
+        1
+        for room in rooms
+        if room.get("name") or room.get("canonical_alias")
+    )
+
+    media_users = media_data.get("users", [])
+    total_media_bytes = sum(user.get("media_length", 0) for user in media_users)
+    subscription_summary = _subscription_context()
+
+    return render_template(
+        "dashboard.html",
+        server_version=version_data.get("server_version", "Unknown"),
+        total_users=total_users,
+        active_users=active_users,
+        deactivated_users=deactivated_users,
+        admin_users=admin_users,
+        max_users=MAX_USERS,
+        total_rooms=total_rooms,
+        public_rooms=public_rooms,
+        private_rooms=private_rooms,
+        named_rooms=named_rooms,
+        top_rooms=rooms[:5],
+        media_users=media_users[:5],
+        total_media=_format_bytes(total_media_bytes),
+        format_bytes=_format_bytes,
+        **subscription_summary,
+    )
 
 
 ## User routes
@@ -699,35 +806,10 @@ def get_server_status():
 @app.route("/subscription", methods=["GET"])
 @login_required
 def subscription():
-    data = _billing_request(
-        "GET",
-        f"/internal/tenants/{BILLING_CUSTOMER_ID}/subscription",
-    )
-
-    period_end_display = None
-    if data and data.get("current_period_end"):
-        period_end_display = datetime.fromtimestamp(
-            data["current_period_end"], tz=timezone.utc
-        ).strftime("%B %-d, %Y")
-
-    plan_type = (data or {}).get("plan_type", "")
-    plan_display = _PLAN_DISPLAY.get(plan_type, plan_type)
-    plan_features = _PLAN_FEATURES.get(plan_type)
-
-    extra_storage = (data or {}).get("extra_storage_gb", 0) or 0
-    total_storage_gb = None
-    if plan_features:
-        total_storage_gb = plan_features["storage_gb"] + extra_storage
-
     return render_template(
         "subscription.html",
-        sub=data,
-        plan_display=plan_display,
-        plan_features=plan_features,
-        period_end_display=period_end_display,
-        billing_configured=bool(BILLING_SERVICE_URL and BILLING_CUSTOMER_ID),
         max_users=MAX_USERS,
-        total_storage_gb=total_storage_gb,
+        **_subscription_context(),
     )
 
 

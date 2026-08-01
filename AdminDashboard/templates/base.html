@@ -2,11 +2,15 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>{% block title %}Matrix Admin{% endblock %} – Redoubt Systems</title>
+  <title>{% block title %}Redoubt Admin{% endblock %}</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
 
   <link rel="icon" type="image/png"
         href="{{ url_for('static', filename='img/favicon.png') }}">
+  <link rel="preload"
+        as="image"
+        type="image/webp"
+        href="{{ url_for('static', filename='img/vault-bg.webp') }}">
   <link rel="stylesheet"
         href="{{ url_for('static', filename='css/admin.css') }}">
 </head>
@@ -21,7 +25,7 @@
         class="logo"
       >
       <div class="header-text">
-        <h1>Matrix Admin Portal</h1>
+        <h1>Redoubt Admin Portal</h1>
         <span class="server-name">{{ server_name }}</span>
       </div>
       {% if current_user %}
@@ -37,6 +41,10 @@
 
     {% if current_user %}
     <nav class="nav">
+      <a href="{{ url_for('dashboard') }}"
+         class="nav-link{% if request.endpoint == 'dashboard' %} active{% endif %}">
+        Dashboard
+      </a>
       <a href="{{ url_for('get_users') }}"
          class="nav-link{% if request.endpoint in ['get_users', 'new_user_form', 'get_user', 'create_user', 'deactivate_user', 'reset_password', 'resend_invite'] %} active{% endif %}">
         Users

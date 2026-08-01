@@ -434,6 +434,7 @@
     mode: '0644'
   loop:
     - base.html
+    - dashboard.html
     - error.html
     - login.html
     - roomCreate.html

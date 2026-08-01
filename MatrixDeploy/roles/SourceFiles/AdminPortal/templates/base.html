@@ -36,6 +36,10 @@
 
     {% if current_user %}
     <nav class="nav">
+      <a href="{{ url_for('dashboard') }}"
+         class="nav-link{% if request.endpoint == 'dashboard' %} active{% endif %}">
+        Dashboard
+      </a>
       <a href="{{ url_for('get_users') }}"
          class="nav-link{% if request.endpoint in ['get_users', 'new_user_form', 'get_user', 'create_user', 'deactivate_user', 'reset_password', 'resend_invite'] %} active{% endif %}">
         Users
