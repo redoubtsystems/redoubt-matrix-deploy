@@ -2,6 +2,7 @@ from flask import (
     Flask,
     after_this_request,
     flash,
+    jsonify,
     redirect,
     render_template,
     request,
@@ -53,6 +54,7 @@ if not SYNAPSE_URL:
 ADMIN_V2  = f"{SYNAPSE_URL}/_synapse/admin/v2/"
 ADMIN_V1  = f"{SYNAPSE_URL}/_synapse/admin/v1/"
 CLIENT_V3 = f"{SYNAPSE_URL}/_matrix/client/v3/"
+SYNAPSE_HEALTH_URL = f"{SYNAPSE_URL}/health"
 
 SMTP_SERVER   = os.getenv("SMTP_SERVER", "")
 SMTP_PORT     = int(os.getenv("SMTP_PORT", "587"))
@@ -114,6 +116,36 @@ def synapse_request(method, url, **kwargs):
         raise SynapseAPIError(error, r.status_code)
 
     return r.json() if r.content else None
+
+
+def _synapse_health_status():
+    checked_at = _utc_now_iso()
+    try:
+        response = requests.get(SYNAPSE_HEALTH_URL, timeout=5)
+    except requests.RequestException:
+        return {
+            "status": "offline",
+            "label": "Offline",
+            "detail": "Synapse health check cannot be reached.",
+            "checked_at": checked_at,
+        }
+
+    if response.ok:
+        return {
+            "status": "online",
+            "label": "Online",
+            "detail": "Synapse health check passed.",
+            "checked_at": checked_at,
+            "status_code": response.status_code,
+        }
+
+    return {
+        "status": "unhealthy",
+        "label": "Unhealthy",
+        "detail": f"Synapse health check returned HTTP {response.status_code}.",
+        "checked_at": checked_at,
+        "status_code": response.status_code,
+    }
 
 
 def _active_user_count():
@@ -197,7 +229,7 @@ def _postgres_base_args():
     ]
 
 
-def _run_postgres_tool(cmd, timeout):
+def _run_postgres_tool(cmd, timeout, operation="Database export"):
     try:
         return subprocess.run(
             cmd,
@@ -209,16 +241,16 @@ def _run_postgres_tool(cmd, timeout):
         )
     except FileNotFoundError as exc:
         raise SynapseAPIError(
-            f"Database export tool is not installed in this container: {exc.filename}",
+            f"{operation} tool is not installed in this container: {exc.filename}",
             500,
         )
     except subprocess.TimeoutExpired:
-        raise SynapseAPIError("Database export timed out.", 504)
+        raise SynapseAPIError(f"{operation} timed out.", 504)
 
 
-def _postgres_error_message(stderr):
+def _postgres_error_message(stderr, default="Database export failed."):
     if not stderr:
-        return "Database export failed."
+        return default
     return stderr.strip().splitlines()[-1][:500]
 
 
@@ -452,6 +484,38 @@ def _room_id(localpart):
     return quote(f"!{localpart}:{SERVER_NAME}", safe="")
 
 
+def _is_public_room(room):
+    return bool(room.get("public")) or room.get("join_rules") == "public"
+
+
+def _hydrate_room_summaries(rooms):
+    for room in rooms:
+        room_id = room.get("room_id")
+        if not room_id:
+            continue
+
+        try:
+            details = synapse_request("GET", f"{ADMIN_V1}rooms/{quote(room_id, safe='')}")
+        except SynapseAPIError as error:
+            if error.status_code == 401:
+                raise
+            continue
+
+        for key in ("name", "canonical_alias", "topic"):
+            if details.get(key):
+                room[key] = details[key]
+
+    return rooms
+
+
+def _set_room_directory_visibility(room_id, visibility):
+    synapse_request(
+        "PUT",
+        f"{CLIENT_V3}directory/list/room/{quote(room_id, safe='')}",
+        json={"visibility": visibility},
+    )
+
+
 def _bg_request(method, url, access_token, **kwargs):
     """Minimal request wrapper for background threads (no Flask context)."""
     headers = {
@@ -471,7 +535,7 @@ def _auto_join_to_public_rooms(user_id, access_token):
     if not data:
         return
     for room in data.get("rooms", []):
-        if room.get("public") and room.get("room_id"):
+        if _is_public_room(room) and room.get("room_id"):
             _bg_request(
                 "POST",
                 f"{ADMIN_V1}join/{quote(room['room_id'], safe='')}",
@@ -653,7 +717,6 @@ def logout():
 @app.route("/dashboard", methods=["GET"])
 @login_required
 def dashboard():
-    version_data = synapse_request("GET", f"{ADMIN_V1}server_version")
     users_data = synapse_request(
         "GET",
         f"{ADMIN_V2}users",
@@ -686,13 +749,16 @@ def dashboard():
         room["localpart"] = rid.lstrip("!").split(":")[0] if rid else ""
 
     total_rooms = rooms_data.get("total_rooms", len(rooms))
-    public_rooms = sum(1 for room in rooms if room.get("public"))
+    public_rooms = sum(1 for room in rooms if _is_public_room(room))
     private_rooms = max(total_rooms - public_rooms, 0)
     named_rooms = sum(
         1
         for room in rooms
         if room.get("name") or room.get("canonical_alias")
     )
+    top_public_rooms = _hydrate_room_summaries([
+        room for room in rooms if _is_public_room(room)
+    ][:5])
 
     media_users = media_data.get("users", [])
     total_media_bytes = sum(user.get("media_length", 0) for user in media_users)
@@ -700,7 +766,6 @@ def dashboard():
 
     return render_template(
         "dashboard.html",
-        server_version=version_data.get("server_version", "Unknown"),
         total_users=total_users,
         active_users=active_users,
         deactivated_users=deactivated_users,
@@ -710,7 +775,7 @@ def dashboard():
         public_rooms=public_rooms,
         private_rooms=private_rooms,
         named_rooms=named_rooms,
-        top_rooms=rooms[:5],
+        top_public_rooms=top_public_rooms,
         media_users=media_users[:5],
         total_media=_format_bytes(total_media_bytes),
         format_bytes=_format_bytes,
@@ -915,9 +980,12 @@ def create_room():
     alias      = request.form.get("alias", "").strip()
     topic      = request.form.get("topic", "").strip()
     visibility = request.form.get("visibility", "private")
+    if visibility not in ("private", "public"):
+        visibility = "private"
 
     body: dict = {
         "name": name,
+        "visibility": visibility,
         "preset": "public_chat" if visibility == "public" else "private_chat",
     }
     if alias:
@@ -928,6 +996,7 @@ def create_room():
     result = synapse_request("POST", f"{CLIENT_V3}createRoom", json=body)
 
     if visibility == "public" and result:
+        _set_room_directory_visibility(result["room_id"], "public")
         _token = session["access_token"]
         threading.Thread(
             target=_auto_join_all_to_room, args=(result["room_id"], _token), daemon=True
@@ -999,7 +1068,6 @@ def delete_room(room_localpart):
 @app.route("/server", methods=["GET"])
 @login_required
 def get_server_status():
-    version_data = synapse_request("GET", f"{ADMIN_V1}server_version")
     active_users = _active_user_count()
     room_data = synapse_request("GET", f"{ADMIN_V1}rooms", params={"limit": 1})
     media_data = synapse_request(
@@ -1007,27 +1075,26 @@ def get_server_status():
         f"{ADMIN_V1}statistics/users/media",
         params={"limit": 100, "order_by": "media_length", "dir": "b"},
     )
-    try:
-        db_rooms_data = synapse_request("GET", f"{ADMIN_V1}statistics/database/rooms")
-        db_rooms = db_rooms_data.get("rooms", [])
-    except SynapseAPIError:
-        db_rooms = None
 
     media_users = media_data.get("users", [])
     total_media_bytes = sum(u.get("media_length", 0) for u in media_users)
 
     return render_template(
         "server.html",
-        server_version=version_data.get("server_version", "Unknown"),
         active_users=active_users,
         max_users=MAX_USERS,
         total_rooms=room_data.get("total_rooms", 0),
         media_users=media_users,
         total_media=_format_bytes(total_media_bytes),
-        db_rooms=db_rooms,
         database_backup_configured=_database_backup_configured(),
         format_bytes=_format_bytes,
     )
+
+
+@app.route("/server/health", methods=["GET"])
+@login_required
+def server_health():
+    return jsonify(_synapse_health_status())
 
 
 @app.route("/server/database/backup", methods=["POST"])

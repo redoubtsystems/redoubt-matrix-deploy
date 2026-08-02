@@ -84,5 +84,85 @@
 
   </div>
 
+  {% if current_user %}
+  <script>
+    (() => {
+      const healthIndicators = document.querySelectorAll("[data-server-health]");
+      if (!healthIndicators.length) {
+        return;
+      }
+
+      const labelTargets = document.querySelectorAll("[data-server-health-label]");
+      const detailTargets = document.querySelectorAll("[data-server-health-detail]");
+      const statusClasses = [
+        "server-health-checking",
+        "server-health-online",
+        "server-health-unhealthy",
+        "server-health-offline",
+        "server-health-unknown",
+      ];
+
+      function formatCheckedAt(value) {
+        if (!value) {
+          return "";
+        }
+
+        const checkedAt = new Date(value);
+        if (Number.isNaN(checkedAt.getTime())) {
+          return "";
+        }
+
+        return `Last checked ${checkedAt.toLocaleTimeString([], {
+          hour: "numeric",
+          minute: "2-digit",
+        })}`;
+      }
+
+      function setHealth(data) {
+        const status = data.status || "unknown";
+        const label = data.label || "Unknown";
+        const checkedAt = formatCheckedAt(data.checked_at);
+        const detail = [data.detail, checkedAt].filter(Boolean).join(" ");
+
+        healthIndicators.forEach((indicator) => {
+          indicator.classList.remove(...statusClasses);
+          indicator.classList.add(`server-health-${status}`);
+        });
+        labelTargets.forEach((target) => {
+          target.textContent = label;
+        });
+        detailTargets.forEach((target) => {
+          target.textContent = detail || "Server status is unavailable.";
+        });
+      }
+
+      async function refreshHealth() {
+        try {
+          const response = await fetch("{{ url_for('server_health') }}", {
+            credentials: "same-origin",
+            headers: { "Accept": "application/json" },
+          });
+
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+
+          setHealth(await response.json());
+        } catch (error) {
+          setHealth({
+            status: "unknown",
+            label: "Unknown",
+            detail: "Server status is unavailable.",
+            checked_at: new Date().toISOString(),
+          });
+        }
+      }
+
+      refreshHealth();
+      window.setInterval(refreshHealth, 180000);
+    })();
+  </script>
+  {% endif %}
+
 </body>
 </html>

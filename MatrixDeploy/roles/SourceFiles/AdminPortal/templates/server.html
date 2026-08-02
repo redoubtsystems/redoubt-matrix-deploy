@@ -12,8 +12,14 @@
   <table class="detail-table">
     <tbody>
       <tr>
-        <th>Synapse Version</th>
-        <td>{{ server_version }}</td>
+        <th>Server Status</th>
+        <td class="server-health-cell">
+          <span class="server-health server-health-checking" data-server-health role="status" aria-live="polite">
+            <span class="server-health-dot" aria-hidden="true"></span>
+            <span data-server-health-label>Checking</span>
+          </span>
+          <div class="muted server-health-detail" data-server-health-detail>Checking Synapse health...</div>
+        </td>
       </tr>
       <tr>
         <th>Active Users</th>
@@ -32,6 +38,34 @@
       </tr>
     </tbody>
   </table>
+
+</section>
+
+<section class="panel">
+  <h2 class="section-heading">Media Usage by User</h2>
+
+  {% if media_users %}
+  <table class="users-table">
+    <thead>
+      <tr>
+        <th>User</th>
+        <th>Files</th>
+        <th>Total Size</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for user in media_users %}
+      <tr>
+        <td class="mxid">{{ user.user_id }}</td>
+        <td>{{ user.media_count }}</td>
+        <td>{{ format_bytes(user.media_length) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p class="muted">No media uploads.</p>
+  {% endif %}
 
 </section>
 
@@ -63,62 +97,6 @@
 
       <button type="submit" class="btn primary">Download Encrypted Package</button>
     </form>
-  {% endif %}
-
-</section>
-
-<section class="panel">
-
-  <h2 class="section-heading">Media Usage by User</h2>
-
-  {% if media_users %}
-  <table class="users-table">
-    <thead>
-      <tr>
-        <th>User</th>
-        <th>Files</th>
-        <th>Total Size</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for user in media_users %}
-      <tr>
-        <td class="mxid">{{ user.user_id }}</td>
-        <td>{{ user.media_count }}</td>
-        <td>{{ format_bytes(user.media_length) }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-    <p class="muted">No media uploads.</p>
-  {% endif %}
-
-</section>
-
-<section class="panel">
-
-  <h2 class="section-heading">Largest Rooms by Database Size</h2>
-
-  {% if db_rooms %}
-  <table class="users-table">
-    <thead>
-      <tr>
-        <th>Room</th>
-        <th>Estimated Size</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for room in db_rooms %}
-      <tr>
-        <td>{{ room.room_name or room.room_id }}</td>
-        <td>{{ format_bytes(room.estimated_size) }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-    <p class="muted">No database size data available.</p>
   {% endif %}
 
 </section>

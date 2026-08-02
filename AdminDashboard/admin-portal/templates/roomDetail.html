@@ -31,7 +31,7 @@
       <tr>
         <th>Visibility</th>
         <td>
-          {% if room.public %}
+          {% if room.public or room.join_rules == "public" %}
             <span class="badge user">Public</span>
           {% else %}
             <span class="badge admin">Private</span>

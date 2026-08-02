@@ -161,6 +161,10 @@ def _room_id(localpart):
     return quote(f"!{localpart}:{SERVER_NAME}", safe="")
 
 
+def _is_public_room(room):
+    return bool(room.get("public")) or room.get("join_rules") == "public"
+
+
 def _bg_request(method, url, access_token, **kwargs):
     """Minimal request wrapper for background threads (no Flask context)."""
     headers = {
@@ -180,13 +184,21 @@ def _auto_join_to_public_rooms(user_id, access_token):
     if not data:
         return
     for room in data.get("rooms", []):
-        if room.get("public") and room.get("room_id"):
+        if _is_public_room(room) and room.get("room_id"):
             _bg_request(
                 "POST",
                 f"{ADMIN_V1}join/{quote(room['room_id'], safe='')}",
                 access_token,
                 json={"user_id": user_id},
             )
+
+
+def _set_room_directory_visibility(room_id, visibility):
+    synapse_request(
+        "PUT",
+        f"{CLIENT_V3}directory/list/room/{quote(room_id, safe='')}",
+        json={"visibility": visibility},
+    )
 
 
 def _auto_join_all_to_room(room_id, access_token):
@@ -651,9 +663,12 @@ def create_room():
     alias      = request.form.get("alias", "").strip()
     topic      = request.form.get("topic", "").strip()
     visibility = request.form.get("visibility", "private")
+    if visibility not in ("private", "public"):
+        visibility = "private"
 
     body: dict = {
         "name": name,
+        "visibility": visibility,
         "preset": "public_chat" if visibility == "public" else "private_chat",
     }
     if alias:
@@ -664,6 +679,7 @@ def create_room():
     result = synapse_request("POST", f"{CLIENT_V3}createRoom", json=body)
 
     if visibility == "public" and result:
+        _set_room_directory_visibility(result["room_id"], "public")
         _token = session["access_token"]
         threading.Thread(
             target=_auto_join_all_to_room, args=(result["room_id"], _token), daemon=True

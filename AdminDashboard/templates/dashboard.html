@@ -33,9 +33,14 @@
     </article>
 
     <article class="dashboard-card">
-      <div class="dashboard-card-label">Server</div>
-      <div class="dashboard-card-value">{{ server_version }}</div>
-      <div class="dashboard-card-meta">{{ total_media }} tracked media storage</div>
+      <div class="dashboard-card-label">Server Status</div>
+      <div class="dashboard-card-value dashboard-card-status">
+        <span class="server-health server-health-checking" data-server-health role="status" aria-live="polite">
+          <span class="server-health-dot" aria-hidden="true"></span>
+          <span data-server-health-label>Checking</span>
+        </span>
+      </div>
+      <div class="dashboard-card-meta" data-server-health-detail>Checking Synapse health...</div>
       <a href="{{ url_for('get_server_status') }}" class="dashboard-card-link">View server status</a>
     </article>
 
@@ -82,45 +87,44 @@
 <section class="dashboard-columns">
   <div class="panel">
     <header class="page-header compact">
-      <h2>Largest Rooms</h2>
+      <h2>Largest Public Rooms</h2>
       <a href="{{ url_for('new_room_form') }}" class="btn primary">Create Room</a>
     </header>
 
-    {% if top_rooms %}
+    {% if top_public_rooms %}
     <table class="users-table compact-table">
       <thead>
         <tr>
           <th>Room</th>
+          <th>Description</th>
           <th>Members</th>
-          <th>Visibility</th>
         </tr>
       </thead>
       <tbody>
-        {% for room in top_rooms %}
+        {% for room in top_public_rooms %}
         <tr>
           <td>
             {% if room.localpart %}
               <a href="{{ url_for('get_room', room_localpart=room.localpart) }}" class="row-link">
-                {{ room.name or room.canonical_alias or room.room_id }}
+                {{ room.name or room.canonical_alias or "Unnamed public room" }}
               </a>
             {% else %}
-              {{ room.name or room.canonical_alias or "Unknown room" }}
+              {{ room.name or room.canonical_alias or "Unnamed public room" }}
             {% endif %}
+            {% if room.canonical_alias %}
+              <div class="room-meta">{{ room.canonical_alias }}</div>
+            {% endif %}
+          </td>
+          <td class="room-description">
+            {{ room.topic or "No topic set" }}
           </td>
           <td>{{ room.joined_members }}</td>
-          <td>
-            {% if room.public %}
-              <span class="badge user">Public</span>
-            {% else %}
-              <span class="badge admin">Private</span>
-            {% endif %}
-          </td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
     {% else %}
-      <p class="muted">No rooms found on this homeserver.</p>
+      <p class="muted">No public rooms found on this homeserver.</p>
     {% endif %}
   </div>
 
