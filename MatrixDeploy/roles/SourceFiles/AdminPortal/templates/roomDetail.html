@@ -71,6 +71,7 @@
             action="{{ url_for('room_remove_user', room_localpart=room_localpart) }}"
             class="inline-form"
           >
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="user_id" value="{{ member }}" />
             <button
               type="submit"
@@ -95,6 +96,7 @@
     action="{{ url_for('room_invite', room_localpart=room_localpart) }}"
     class="form"
   >
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="form-group">
       <label for="username">Username</label>
       <input
@@ -116,6 +118,7 @@
     method="post"
     action="{{ url_for('delete_room', room_localpart=room_localpart) }}"
   >
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <button
       type="submit"
       class="btn danger"

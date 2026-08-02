@@ -115,6 +115,7 @@
     <a href="mailto:support@redoubt.systems">support@redoubt.systems</a>.
   </p>
   <form method="post" action="{{ url_for('subscription_portal') }}" target="_blank">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <button type="submit" class="btn primary">Open Billing Portal</button>
   </form>
 

@@ -59,6 +59,7 @@ User: {{ user.name }}
   <form method="post"
         action="{{ url_for('reset_password', username=localpart) }}"
         class="form inline-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="form-group">
       <label for="new_password">New Password</label>
       <input type="password" id="new_password" name="new_password"
@@ -76,6 +77,7 @@ User: {{ user.name }}
   <form method="post"
         action="{{ url_for('resend_invite', username=localpart) }}"
         class="form inline-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="form-group">
       <label for="invite_email">User's Email Address</label>
       <input type="email" id="invite_email" name="email"
@@ -91,7 +93,9 @@ User: {{ user.name }}
   <div class="actions actions-footer">
     {% if not user.deactivated %}
     <form method="post"
-          action="{{ url_for('deactivate_user', username=localpart) }}">
+          action="{{ url_for('deactivate_user', username=localpart) }}"
+          onsubmit="return confirm('Deactivate {{ user.name }}? This cannot be undone.');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button class="btn danger" type="submit">Deactivate User</button>
     </form>
     {% endif %}

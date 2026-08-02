@@ -2,11 +2,15 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>{% block title %}Matrix Admin{% endblock %} – Redoubt Systems</title>
+  <title>{% block title %}Redoubt Admin{% endblock %}</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
 
   <link rel="icon" type="image/png"
         href="{{ url_for('static', filename='img/favicon.png') }}">
+  <link rel="preload"
+        as="image"
+        type="image/webp"
+        href="{{ url_for('static', filename='img/vault-bg.webp') }}">
   <link rel="stylesheet"
         href="{{ url_for('static', filename='css/admin.css') }}">
 </head>
@@ -21,13 +25,14 @@
         class="logo"
       >
       <div class="header-text">
-        <h1>Matrix Admin Portal</h1>
+        <h1>Redoubt Admin Portal</h1>
         <span class="server-name">{{ server_name }}</span>
       </div>
       {% if current_user %}
       <div class="header-actions">
         <span class="muted current-user">{{ current_user }}</span>
         <form method="post" action="{{ url_for('logout') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit" class="btn secondary">Sign Out</button>
         </form>
       </div>
@@ -49,7 +54,7 @@
         Rooms
       </a>
       <a href="{{ url_for('get_server_status') }}"
-         class="nav-link{% if request.endpoint in ['get_server_status'] %} active{% endif %}">
+         class="nav-link{% if request.endpoint in ['get_server_status', 'download_database_backup'] %} active{% endif %}">
         Server
       </a>
       <a href="{{ url_for('subscription') }}"

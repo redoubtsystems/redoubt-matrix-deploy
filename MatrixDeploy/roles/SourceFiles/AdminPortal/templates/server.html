@@ -37,6 +37,38 @@
 
 <section class="panel">
 
+  <header class="page-header">
+    <div>
+      <h2>Database Export</h2>
+      <p class="muted page-subtitle">Download a password-encrypted PostgreSQL backup package for this homeserver.</p>
+    </div>
+  </header>
+
+  {% if not database_backup_configured %}
+    <p class="muted">Database export is not configured for this server.</p>
+  {% else %}
+    <form method="post" action="{{ url_for('download_database_backup') }}" class="form export-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+      <div class="form-group">
+        <label for="export_password">Export password</label>
+        <input id="export_password" name="export_password" type="password" autocomplete="new-password" required>
+      </div>
+
+      <div class="form-group">
+        <label for="confirm_export_password">Confirm export password</label>
+        <input id="confirm_export_password" name="confirm_export_password" type="password" autocomplete="new-password" required>
+        <p class="muted form-help">Save this password. Redoubt cannot recover it.</p>
+      </div>
+
+      <button type="submit" class="btn primary">Download Encrypted Package</button>
+    </form>
+  {% endif %}
+
+</section>
+
+<section class="panel">
+
   <h2 class="section-heading">Media Usage by User</h2>
 
   {% if media_users %}

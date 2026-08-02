@@ -420,8 +420,10 @@
     group: "{{ admin_user }}"
     mode: '0644'
   loop:
+    - favicon.png
     - redoubt-logo.png
     - vault-bg.png
+    - vault-bg.webp
   loop_control:
     loop_var: file
 
@@ -1103,6 +1105,30 @@
     group: root
     mode: '0755'
 
+- name: Create operator scripts directory
+  file:
+    path: /opt/redoubt/scripts
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Deploy database backup helper
+  copy:
+    src: ../../SourceFiles/database_backups.py
+    dest: /opt/redoubt/scripts/database_backups.py
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Create tenant database backup directory
+  file:
+    path: /srv/matrix/backups
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
 - name: Deploy container check exclusions file (if absent)
   copy:
     dest: /opt/redoubt/container-check-exclusions
@@ -1113,6 +1139,50 @@
     group: root
     mode: '0644'
     force: false
+
+- name: Deploy tenant database backup service
+  copy:
+    dest: /etc/systemd/system/redoubt-tenant-database-backup.service
+    content: |
+      [Unit]
+      Description=Back up Redoubt tenant PostgreSQL databases
+      Requires=docker.service
+      After=docker.service
+
+      [Service]
+      Type=oneshot
+      UMask=0077
+      ExecStart=/usr/bin/python3 /opt/redoubt/scripts/database_backups.py backup-all-tenants --output-dir /srv/matrix/backups --retention-days {{ backup_retention_days | default(14) }}
+      StandardOutput=journal
+      StandardError=journal
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Deploy tenant database backup timer
+  copy:
+    dest: /etc/systemd/system/redoubt-tenant-database-backup.timer
+    content: |
+      [Unit]
+      Description=Run Redoubt tenant PostgreSQL database backups daily
+
+      [Timer]
+      OnCalendar=03:40
+      RandomizedDelaySec=45m
+      Persistent=true
+
+      [Install]
+      WantedBy=timers.target
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Enable and start tenant database backup timer
+  systemd:
+    name: redoubt-tenant-database-backup.timer
+    enabled: true
+    state: started
+    daemon_reload: true
 
 - name: Deploy container health check cron job
   copy:

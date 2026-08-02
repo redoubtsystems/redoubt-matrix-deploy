@@ -8,7 +8,17 @@
     <div>
       <h2>Rooms</h2>
       {% if total %}
-        <p class="muted">{{ total }} room{{ 's' if total != 1 }}</p>
+        <p class="muted">
+          {% if not show_all and rooms|length < total %}
+            {{ rooms|length }} of {{ total }} room{{ 's' if total != 1 }}
+            — <a href="{{ url_for('get_rooms', show_all=1) }}">Show all</a>
+          {% else %}
+            {{ total }} room{{ 's' if total != 1 }}
+            {% if show_all %}
+              — <a href="{{ url_for('get_rooms') }}">Hide unnamed</a>
+            {% endif %}
+          {% endif %}
+        </p>
       {% endif %}
     </div>
     <a href="{{ url_for('new_room_form') }}" class="btn primary">Create Room</a>

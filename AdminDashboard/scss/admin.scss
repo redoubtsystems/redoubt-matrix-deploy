@@ -264,6 +264,10 @@ a {
   max-width: 480px;
 }
 
+.export-form {
+  max-width: 560px;
+}
+
 .form-group {
   margin-bottom: 1.25rem;
 
@@ -304,6 +308,11 @@ a {
       margin-right: 0.5rem;
     }
   }
+}
+
+.form-help {
+  margin: 0.4rem 0 0;
+  font-size: 0.8rem;
 }
 
 /* -----------------------------

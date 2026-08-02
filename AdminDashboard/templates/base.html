@@ -54,7 +54,7 @@
         Rooms
       </a>
       <a href="{{ url_for('get_server_status') }}"
-         class="nav-link{% if request.endpoint in ['get_server_status'] %} active{% endif %}">
+         class="nav-link{% if request.endpoint in ['get_server_status', 'download_database_backup'] %} active{% endif %}">
         Server
       </a>
       <a href="{{ url_for('subscription') }}"

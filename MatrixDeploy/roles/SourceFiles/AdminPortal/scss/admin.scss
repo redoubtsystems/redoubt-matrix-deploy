@@ -26,7 +26,15 @@ a {
 }
 
 .vault-bg {
-  background: url("/static/img/vault-bg.png") center / cover no-repeat fixed;
+  background-color: $bg-dark;
+  background-image: url("/static/img/vault-bg.png");
+  background-image: image-set(
+    url("/static/img/vault-bg.webp") type("image/webp"),
+    url("/static/img/vault-bg.png") type("image/png")
+  );
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
 }
 
 .overlay {
@@ -256,6 +264,10 @@ a {
   max-width: 480px;
 }
 
+.export-form {
+  max-width: 560px;
+}
+
 .form-group {
   margin-bottom: 1.25rem;
 
@@ -296,6 +308,11 @@ a {
       margin-right: 0.5rem;
     }
   }
+}
+
+.form-help {
+  margin: 0.4rem 0 0;
+  font-size: 0.8rem;
 }
 
 /* -----------------------------
@@ -372,7 +389,6 @@ a {
     border: 1px solid rgba(96, 165, 250, 0.25);
   }
 }
-
 
 /* -----------------------------
    Dashboard

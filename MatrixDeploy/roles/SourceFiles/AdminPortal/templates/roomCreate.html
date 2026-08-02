@@ -11,6 +11,7 @@
   </header>
 
   <form method="post" action="{{ url_for('create_room') }}" class="form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
     <div class="form-group">
       <label for="name">Room Name</label>

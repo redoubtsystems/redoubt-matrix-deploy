@@ -1,16 +1,28 @@
 from flask import (
     Flask,
+    after_this_request,
     flash,
     redirect,
     render_template,
     request,
+    send_file,
     session,
     url_for,
 )
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from flask_wtf.csrf import CSRFProtect
 from functools import wraps
+import hashlib
+import json
 import os
+import re
 import secrets
+import shutil
 import smtplib
+import subprocess
+import tarfile
+import tempfile
 import threading
 from datetime import datetime, timezone
 from email.mime.text import MIMEText
@@ -20,6 +32,13 @@ from urllib.parse import quote
 
 app = Flask(__name__)
 app.secret_key = os.environ["FLASK_SECRET_KEY"]
+app.config.update(
+    SESSION_COOKIE_SECURE=os.getenv("SESSION_COOKIE_SECURE", "true").lower() != "false",
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+)
+csrf = CSRFProtect(app)
+limiter = Limiter(app=app, key_func=get_remote_address, default_limits=[])
 
 
 ## Config
@@ -47,6 +66,16 @@ MAX_USERS     = int(os.getenv("MAX_USERS", "0"))
 BILLING_SERVICE_URL    = os.getenv("BILLING_SERVICE_URL", "")
 BILLING_SERVICE_SECRET = os.getenv("BILLING_SERVICE_SECRET", "")
 BILLING_CUSTOMER_ID    = os.getenv("BILLING_CUSTOMER_ID", "")
+
+POSTGRES_HOST     = os.getenv("POSTGRES_HOST", "postgres")
+POSTGRES_PORT     = os.getenv("POSTGRES_PORT", "5432")
+POSTGRES_DB       = os.getenv("POSTGRES_DB", "synapse")
+POSTGRES_USER     = os.getenv("POSTGRES_USER", "synapse")
+POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "")
+BACKUP_TIMEOUT_SECONDS = int(os.getenv("BACKUP_TIMEOUT_SECONDS", "600"))
+EXPORT_PASSWORD_MIN_LENGTH = int(os.getenv("EXPORT_PASSWORD_MIN_LENGTH", "12"))
+EXPORT_FORMAT_VERSION = 1
+EXPORT_GPG_S2K_COUNT = "65011712"
 
 
 ## Error class
@@ -137,6 +166,214 @@ def _format_bytes(n):
             return f"{n:.1f} {unit}"
         n /= 1024
     return f"{n:.1f} PB"
+
+
+def _database_backup_configured():
+    return all((
+        POSTGRES_HOST,
+        POSTGRES_PORT,
+        POSTGRES_DB,
+        POSTGRES_USER,
+        POSTGRES_PASSWORD,
+    ))
+
+
+def _postgres_env():
+    env = os.environ.copy()
+    env["PGPASSWORD"] = POSTGRES_PASSWORD
+    return env
+
+
+def _postgres_base_args():
+    return [
+        "-h",
+        POSTGRES_HOST,
+        "-p",
+        str(POSTGRES_PORT),
+        "-U",
+        POSTGRES_USER,
+        "-d",
+        POSTGRES_DB,
+    ]
+
+
+def _run_postgres_tool(cmd, timeout):
+    try:
+        return subprocess.run(
+            cmd,
+            env=_postgres_env(),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise SynapseAPIError(
+            f"Database export tool is not installed in this container: {exc.filename}",
+            500,
+        )
+    except subprocess.TimeoutExpired:
+        raise SynapseAPIError("Database export timed out.", 504)
+
+
+def _postgres_error_message(stderr):
+    if not stderr:
+        return "Database export failed."
+    return stderr.strip().splitlines()[-1][:500]
+
+
+def _validate_export_password(password, confirm_password):
+    if not password:
+        return "Export password is required."
+    if password != confirm_password:
+        return "Export passwords do not match."
+    if len(password) < EXPORT_PASSWORD_MIN_LENGTH:
+        return f"Export password must be at least {EXPORT_PASSWORD_MIN_LENGTH} characters."
+    if "\n" in password or "\r" in password:
+        return "Export password cannot contain line breaks."
+    return None
+
+
+def _file_sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _utc_now_iso():
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _synapse_server_version():
+    try:
+        data = synapse_request("GET", f"{ADMIN_V1}server_version")
+        return data.get("server_version")
+    except SynapseAPIError:
+        return None
+
+
+def _write_export_manifest(manifest_path, dump_path, created_at, server_version):
+    dump_stat = os.stat(dump_path)
+    manifest = {
+        "format": "redoubt.synapse.postgres.export",
+        "format_version": EXPORT_FORMAT_VERSION,
+        "created_at": created_at,
+        "source": "admin_dashboard",
+        "tenant": {
+            "id": BILLING_CUSTOMER_ID or None,
+            "server_name": SERVER_NAME,
+        },
+        "synapse": {
+            "server_version": server_version,
+        },
+        "database": {
+            "engine": "postgresql",
+            "database": POSTGRES_DB,
+            "dump_file": "synapse.dump",
+            "dump_format": "custom",
+            "dump_sha256": _file_sha256(dump_path),
+            "dump_size_bytes": dump_stat.st_size,
+        },
+        "media": {
+            "included": False,
+        },
+        "package": {
+            "files": [
+                "manifest.json",
+                "synapse.dump",
+            ],
+            "encrypted": True,
+            "encryption": {
+                "tool": "gpg",
+                "mode": "symmetric",
+                "cipher": "AES256",
+                "s2k_digest": "SHA512",
+                "s2k_count": int(EXPORT_GPG_S2K_COUNT),
+            },
+        },
+        "restore_constraints": {
+            "same_server_name_required": True,
+        },
+    }
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2, sort_keys=True)
+        f.write("\n")
+
+
+def _encrypt_export_package(files, encrypted_path, password, gpg_home):
+    os.makedirs(gpg_home, mode=0o700, exist_ok=True)
+    passphrase_read_fd, passphrase_write_fd = os.pipe()
+    try:
+        os.write(passphrase_write_fd, f"{password}\n".encode("utf-8"))
+    finally:
+        os.close(passphrase_write_fd)
+
+    cmd = [
+        "gpg",
+        "--batch",
+        "--yes",
+        "--no-tty",
+        "--pinentry-mode",
+        "loopback",
+        "--no-symkey-cache",
+        "--homedir",
+        gpg_home,
+        "--passphrase-fd",
+        str(passphrase_read_fd),
+        "--symmetric",
+        "--cipher-algo",
+        "AES256",
+        "--s2k-mode",
+        "3",
+        "--s2k-digest-algo",
+        "SHA512",
+        "--s2k-count",
+        EXPORT_GPG_S2K_COUNT,
+        "--compress-algo",
+        "none",
+        "--output",
+        encrypted_path,
+    ]
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            pass_fds=(passphrase_read_fd,),
+        )
+        try:
+            with tarfile.open(fileobj=proc.stdin, mode="w|") as tar:
+                for source_path, archive_name in files:
+                    tar.add(source_path, arcname=archive_name)
+            proc.stdin.close()
+            stdout = proc.stdout.read() if proc.stdout else b""
+            stderr = proc.stderr.read() if proc.stderr else b""
+            returncode = proc.wait(timeout=BACKUP_TIMEOUT_SECONDS)
+        except (BrokenPipeError, OSError) as exc:
+            proc.kill()
+            stdout, stderr = proc.communicate()
+            stderr = (stderr or b"") + f"\n{exc}".encode("utf-8")
+            returncode = proc.returncode if proc.returncode is not None else 1
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            raise SynapseAPIError("Database export encryption timed out.", 504)
+        return subprocess.CompletedProcess(
+            cmd,
+            returncode,
+            stdout=stdout.decode("utf-8", errors="replace"),
+            stderr=stderr.decode("utf-8", errors="replace"),
+        )
+    except FileNotFoundError as exc:
+        raise SynapseAPIError(
+            f"Database export encryption tool is not installed in this container: {exc.filename}",
+            500,
+        )
+    finally:
+        os.close(passphrase_read_fd)
 
 
 _PLAN_DISPLAY = {
@@ -284,6 +521,15 @@ def inject_globals():
     }
 
 
+@app.after_request
+def set_security_headers(response):
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
+
 ## Error handlers
 @app.errorhandler(SynapseAPIError)
 def handle_synapse_error(error):
@@ -330,6 +576,7 @@ def index():
 
 
 @app.route("/login", methods=["GET", "POST"])
+@limiter.limit("5 per minute")
 def login():
     if "access_token" in session:
         return redirect(url_for("dashboard"))
@@ -362,11 +609,7 @@ def login():
             return render_template("login.html")
 
         if not r.ok:
-            try:
-                msg = r.json().get("error", "Login failed.")
-            except ValueError:
-                msg = "Login failed."
-            flash(msg, "error")
+            flash("Username or password incorrect.", "error")
             return render_template("login.html")
 
         data = r.json()
@@ -380,7 +623,7 @@ def login():
             timeout=5,
         )
         if check.status_code == 403:
-            flash("This account does not have admin privileges.", "error")
+            flash("Username or password incorrect.", "error")
             return render_template("login.html")
 
         session["access_token"] = token
@@ -505,6 +748,9 @@ def create_user():
     data = request.form
     admin = data.get("admin") == "true"
     username = data.get("username", "").strip()
+    if not re.match(r'^[a-z0-9._=-]+$', username):
+        flash("Username may only contain lowercase letters, numbers, and . _ = -", "error")
+        return redirect(url_for("new_user_form"))
     user_id = f"@{username}:{SERVER_NAME}"
 
     if MAX_USERS and _active_user_count() >= MAX_USERS:
@@ -779,7 +1025,82 @@ def get_server_status():
         media_users=media_users,
         total_media=_format_bytes(total_media_bytes),
         db_rooms=db_rooms,
+        database_backup_configured=_database_backup_configured(),
         format_bytes=_format_bytes,
+    )
+
+
+@app.route("/server/database/backup", methods=["POST"])
+@login_required
+@limiter.limit("5 per hour")
+def download_database_backup():
+    if not _database_backup_configured():
+        flash("Database export is not configured for this server.", "error")
+        return redirect(url_for("get_server_status"))
+
+    password = request.form.get("export_password", "")
+    confirm_password = request.form.get("confirm_export_password", "")
+    password_error = _validate_export_password(password, confirm_password)
+    if password_error:
+        flash(password_error, "error")
+        return redirect(url_for("get_server_status"))
+
+    export_dir = tempfile.mkdtemp(prefix="redoubt-db-export-")
+    backup_path = os.path.join(export_dir, "synapse.dump")
+    manifest_path = os.path.join(export_dir, "manifest.json")
+    encrypted_path = os.path.join(export_dir, "redoubt-export.tar.gpg")
+    gpg_home = os.path.join(export_dir, "gnupg")
+    created_at = _utc_now_iso()
+    server_version = _synapse_server_version()
+
+    cmd = [
+        "pg_dump",
+        *_postgres_base_args(),
+        "--format=custom",
+        "--compress=6",
+        "--no-owner",
+        "--no-acl",
+        "--file",
+        backup_path,
+    ]
+    result = _run_postgres_tool(cmd, BACKUP_TIMEOUT_SECONDS)
+    if result.returncode != 0:
+        shutil.rmtree(export_dir, ignore_errors=True)
+        raise SynapseAPIError(_postgres_error_message(result.stderr), 500)
+
+    _write_export_manifest(manifest_path, backup_path, created_at, server_version)
+
+    encryption_result = _encrypt_export_package(
+        [
+            (manifest_path, "manifest.json"),
+            (backup_path, "synapse.dump"),
+        ],
+        encrypted_path,
+        password,
+        gpg_home,
+    )
+    try:
+        os.unlink(backup_path)
+    except FileNotFoundError:
+        pass
+    if encryption_result.returncode != 0:
+        shutil.rmtree(export_dir, ignore_errors=True)
+        raise SynapseAPIError(_postgres_error_message(encryption_result.stderr), 500)
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    safe_server_name = re.sub(r"[^A-Za-z0-9_.-]+", "-", SERVER_NAME).strip("-")
+    download_name = f"{safe_server_name}-synapse-export-{timestamp}.tar.gpg"
+
+    @after_this_request
+    def remove_backup_file(response):
+        shutil.rmtree(export_dir, ignore_errors=True)
+        return response
+
+    return send_file(
+        encrypted_path,
+        mimetype="application/octet-stream",
+        as_attachment=True,
+        download_name=download_name,
     )
 
 
