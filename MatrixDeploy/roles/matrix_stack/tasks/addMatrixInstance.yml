@@ -424,6 +424,8 @@
     - redoubt-logo.png
     - vault-bg.png
     - vault-bg.webp
+    - vault-bg-light.png
+    - vault-bg-light.webp
   loop_control:
     loop_var: file
 

@@ -11,6 +11,22 @@
         as="image"
         type="image/webp"
         href="{{ url_for('static', filename='img/vault-bg.webp') }}">
+  <link rel="preload"
+        as="image"
+        type="image/webp"
+        href="{{ url_for('static', filename='img/vault-bg-light.webp') }}">
+  <script>
+    (() => {
+      try {
+        const savedTheme = localStorage.getItem("redoubt-admin-theme");
+        if (savedTheme === "light" || savedTheme === "dark") {
+          document.documentElement.dataset.theme = savedTheme;
+        }
+      } catch (error) {
+        document.documentElement.removeAttribute("data-theme");
+      }
+    })();
+  </script>
   <link rel="stylesheet"
         href="{{ url_for('static', filename='css/admin.css') }}">
 </head>
@@ -28,15 +44,21 @@
         <h1>Redoubt Admin Portal</h1>
         <span class="server-name">{{ server_name }}</span>
       </div>
-      {% if current_user %}
       <div class="header-actions">
+        <button type="button"
+                class="btn secondary theme-toggle"
+                data-theme-toggle
+                aria-label="Switch color theme">
+          Light
+        </button>
+        {% if current_user %}
         <span class="muted current-user">{{ current_user }}</span>
         <form method="post" action="{{ url_for('logout') }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit" class="btn secondary">Sign Out</button>
         </form>
+        {% endif %}
       </div>
-      {% endif %}
     </header>
 
     {% if current_user %}
@@ -83,6 +105,72 @@
     </footer>
 
   </div>
+
+  <script>
+    (() => {
+      const storageKey = "redoubt-admin-theme";
+      const themeButton = document.querySelector("[data-theme-toggle]");
+      const systemLight = window.matchMedia
+        ? window.matchMedia("(prefers-color-scheme: light)")
+        : { matches: false };
+
+      function storedTheme() {
+        try {
+          return localStorage.getItem(storageKey);
+        } catch (error) {
+          return null;
+        }
+      }
+
+      function saveTheme(theme) {
+        try {
+          localStorage.setItem(storageKey, theme);
+        } catch (error) {
+          return;
+        }
+      }
+
+      function activeTheme() {
+        const selected = document.documentElement.dataset.theme;
+        if (selected === "light" || selected === "dark") {
+          return selected;
+        }
+        return systemLight.matches ? "light" : "dark";
+      }
+
+      function updateThemeButton() {
+        if (!themeButton) {
+          return;
+        }
+        const nextTheme = activeTheme() === "light" ? "dark" : "light";
+        themeButton.textContent = nextTheme === "light" ? "Light" : "Dark";
+        themeButton.setAttribute("aria-label", `Switch to ${nextTheme} mode`);
+      }
+
+      if (themeButton) {
+        themeButton.addEventListener("click", () => {
+          const nextTheme = activeTheme() === "light" ? "dark" : "light";
+          document.documentElement.dataset.theme = nextTheme;
+          saveTheme(nextTheme);
+          updateThemeButton();
+        });
+      }
+
+      const handleSystemThemeChange = () => {
+        if (!storedTheme()) {
+          updateThemeButton();
+        }
+      };
+
+      if (typeof systemLight.addEventListener === "function") {
+        systemLight.addEventListener("change", handleSystemThemeChange);
+      } else if (typeof systemLight.addListener === "function") {
+        systemLight.addListener(handleSystemThemeChange);
+      }
+
+      updateThemeButton();
+    })();
+  </script>
 
   {% if current_user %}
   <script>

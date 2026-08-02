@@ -29,7 +29,7 @@ COPY templates/ templates/
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Compile SCSS -> CSS
-RUN sass scss/admin.scss static/css/admin.css
+RUN mkdir -p static/css && sass scss/admin.scss static/css/admin.css
 
 # Flask Port
 EXPOSE 5055
